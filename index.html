@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>K线模拟</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="appError" class="app-error" hidden></div>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">KlineSimilarity</p>
+          <h1>K线模拟训练</h1>
+          <p class="subtitle">晨雾中的金融图书馆：用真实日线，在低噪声环境里练习技术判断、资金分配与风控纪律。</p>
+        </div>
+        <div class="top-actions">
+          <button id="themeToggle" class="ghost" type="button">深色</button>
+          <button id="loadSample" type="button">重载默认数据</button>
+          <label class="file-button">
+            导入 CSV/JSON
+            <input id="fileInput" type="file" accept=".csv,.json,application/json,text/csv" />
+          </label>
+        </div>
+      </header>
+
+      <main>
+        <section id="setup" class="panel setup-panel">
+          <div class="setup-hero">
+            <div>
+              <p class="eyebrow">New Simulation</p>
+              <h2>建立一次历史 K 线训练</h2>
+              <p>默认数据会自动载入。你也可以导入新的 CSV/JSON，进入模拟后，每一步只看当前历史日期以前的信息。</p>
+            </div>
+            <div class="hero-metrics" aria-label="默认交易参数">
+              <span>默认资金 <strong>¥100,000</strong></span>
+              <span>T+1 <strong>已启用</strong></span>
+              <span>日线 <strong>10年样例</strong></span>
+            </div>
+          </div>
+
+          <div class="section-title">
+            <p class="eyebrow">Step 1</p>
+            <h2>选择模式</h2>
+          </div>
+          <div class="mode-grid">
+            <label class="mode-card selected">
+              <input type="radio" name="mode" value="blind" checked />
+              <span class="mode-icon">A1</span>
+              <strong>盲选模式</strong>
+              <span>隐藏真实名称，用随机编号训练纯技术判断。</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="asset" />
+              <span class="mode-icon">SH</span>
+              <strong>资产配置模式</strong>
+              <span>展示代码名称，练习多标的资金调度。</span>
+            </label>
+          </div>
+
+          <div class="setup-grid">
+            <label>初始资金<input id="initialCash" type="number" min="1000" step="1000" value="100000" /></label>
+            <label>佣金费率<input id="commissionRate" type="number" min="0" step="0.0001" value="0.00025" /></label>
+            <label>印花税<input id="stampTaxRate" type="number" min="0" step="0.0001" value="0.0005" /></label>
+            <label>滑点<input id="slippageRate" type="number" min="0" step="0.0001" value="0.001" /></label>
+            <label>成交概率系数<input id="capacityRate" type="number" min="0.0001" max="0.05" step="0.0001" value="0.002" /></label>
+            <label>起始日<input id="startDate" type="date" /></label>
+          </div>
+
+          <div class="section-title compact">
+            <p class="eyebrow">Step 2</p>
+            <h2>选择标的</h2>
+          </div>
+          <div id="dataStatus" class="notice">尚未导入数据，请加载样例或导入 CSV/JSON。</div>
+          <div class="filter-panel">
+            <div class="asset-filter">
+              <label>代码/名称检索<input id="symbolSearch" type="search" placeholder="如 600519、贵州、银行" /></label>
+            </div>
+            <div class="blind-filter">
+              <label>技术条件A
+                <select id="conditionA">
+                  <option value="any">不限</option>
+                  <option value="ma_bull">MA5 上穿/高于 MA20</option>
+                  <option value="above_ma60">收盘价高于 MA60</option>
+                  <option value="macd_positive">MACD DIF 高于 DEA</option>
+                  <option value="rsi_strong">RSI14 高于 50</option>
+                  <option value="volume_expand">成交量高于 VOL20</option>
+                </select>
+              </label>
+              <label>逻辑
+                <select id="conditionLogic">
+                  <option value="and">AND</option>
+                  <option value="or">OR</option>
+                </select>
+              </label>
+              <label>技术条件B
+                <select id="conditionB">
+                  <option value="any">不限</option>
+                  <option value="ma_bull">MA5 上穿/高于 MA20</option>
+                  <option value="above_ma60">收盘价高于 MA60</option>
+                  <option value="macd_positive">MACD DIF 高于 DEA</option>
+                  <option value="rsi_strong">RSI14 高于 50</option>
+                  <option value="volume_expand">成交量高于 VOL20</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div id="symbolList" class="symbol-list"></div>
+          <div class="setup-actions">
+            <button id="selectAll" class="ghost" type="button">全选合格标的</button>
+            <button id="randomStart" class="ghost" type="button">随机起始日</button>
+            <button id="startSim" type="button" disabled>开始模拟</button>
+          </div>
+        </section>
+
+        <section id="simulator" class="simulator hidden">
+          <div class="status-bar panel">
+            <div><span>当前日期</span><strong id="currentDate">-</strong></div>
+            <div><span>总资产</span><strong id="totalAsset">-</strong></div>
+            <div><span>可用资金</span><strong id="cashAvailable">-</strong></div>
+            <div><span>冻结资金</span><strong id="frozenCash">-</strong></div>
+            <div><span>浮动盈亏</span><strong id="floatingPnl">-</strong></div>
+          </div>
+
+          <div class="workspace">
+            <section class="chart-card panel">
+              <div class="chart-head">
+                <div>
+                  <p id="modeBadge" class="eyebrow">盲选模式</p>
+                  <h2 id="activeTitle">-</h2>
+                </div>
+                <div class="chart-controls">
+                  <label>均线周期<input id="maPeriods" type="text" value="5,10,20,60,120,250" /></label>
+                  <label>指标副图
+                    <select id="indicatorSelect" aria-label="选择技术指标">
+                      <option value="MACD">MACD</option>
+                      <option value="KDJ">KDJ</option>
+                      <option value="RSI">RSI</option>
+                      <option value="WR">WR</option>
+                      <option value="BOLL">BOLL</option>
+                      <option value="OBV">OBV</option>
+                      <option value="BIAS">BIAS</option>
+                      <option value="BRAR">BRAR</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <canvas id="chart" width="1200" height="720" aria-label="K线图"></canvas>
+              <div id="crosshairInfo" class="crosshair-info">移动到图表查看 OHLC 与指标。</div>
+              <div id="tabs" class="tabs"></div>
+            </section>
+
+            <aside class="side panel">
+              <section>
+                <h3>交易面板</h3>
+                <label>手数<input id="lotInput" type="number" min="1" step="1" value="1" /></label>
+                <div class="quick-row">
+                  <button data-lots="1" class="ghost lot-quick" type="button">1手</button>
+                  <button data-lots="10" class="ghost lot-quick" type="button">10手</button>
+                  <button id="halfCash" class="ghost" type="button">1/2仓</button>
+                </div>
+                <div id="orderEstimate" class="estimate-card">选择手数后显示预计金额。</div>
+                <div id="tradeHint" class="notice small">委托将以当日收盘价为基准成交。</div>
+                <div class="trade-actions">
+                  <button id="buyBtn" type="button">买入</button>
+                  <button id="sellBtn" class="sell" type="button">卖出</button>
+                </div>
+                <button id="cancelOrders" class="ghost full" type="button">清空提示</button>
+                <button id="nextDay" class="full" type="button">下一交易日</button>
+                <button id="finishSim" class="ghost full" type="button">终止并查看报告</button>
+              </section>
+
+              <section>
+                <h3>今日持仓</h3>
+                <div id="todayPositions" class="positions empty">暂无当日成交持仓</div>
+              </section>
+
+              <section>
+                <h3>持仓</h3>
+                <div id="positions" class="positions empty">暂无持仓</div>
+              </section>
+
+              <section>
+                <h3>交易流水</h3>
+                <div id="orders" class="orders empty">暂无交易</div>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <section id="result" class="panel result hidden"></section>
+      </main>
+    </div>
+    <script src="data/sample-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

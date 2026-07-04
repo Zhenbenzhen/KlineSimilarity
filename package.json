@@ -1,0 +1,12 @@
+{
+  "name": "kline-similarity",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch:sample": "node scripts/fetch_eastmoney_sample.js",
+    "validate:data": "node scripts/validate_data.js data/a_share_daily_10y.json",
+    "smoke:ui": "node scripts/smoke_ui.js",
+    "test": "node scripts/validate_data.js data/a_share_daily_10y.json && node scripts/smoke_ui.js"
+  }
+}
