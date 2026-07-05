@@ -184,7 +184,7 @@ body.dark .setup-hero { background: radial-gradient(circle at right, rgba(126, 1
 .notice { padding: 13px 15px; border: 1px solid var(--soft-line); border-radius: 18px; background: rgba(98, 133, 168, 0.1); color: var(--muted); }
 .notice.small { font-size: 12px; line-height: 1.6; }
 .filter-panel { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; margin-top: 12px; }
-.blind-filter { display: grid; grid-template-columns: 1fr 110px 1fr; gap: 10px; }
+.blind-filter { display: grid; grid-template-columns: 1fr 92px 100px 1fr 92px; gap: 10px; }
 .asset-filter.hidden-filter, .blind-filter.hidden-filter { display: none; }
 .symbol-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin: 14px 0; }
 .symbol-item { padding: 13px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255, 255, 255, 0.26); transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease; }
@@ -204,7 +204,7 @@ body.dark .setup-hero { background: radial-gradient(circle at right, rgba(126, 1
 .workspace { align-items: stretch; }
 .chart-card { flex: 1 1 70%; padding: 16px; min-width: 0; }
 .chart-head { justify-content: space-between; margin-bottom: 12px; align-items: end; }
-.chart-controls { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(140px, 0.8fr); gap: 10px; min-width: min(460px, 52vw); }
+.chart-controls { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(140px, 0.8fr) minmax(130px, 0.7fr); gap: 10px; min-width: min(640px, 58vw); }
 #chart {
   width: 100%;
   height: min(66vh, 740px);
@@ -227,6 +227,9 @@ body.dark #chart { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04)
 .quick-row { margin: 10px 0; }
 .trade-actions { margin-top: 10px; }
 .estimate-card { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: rgba(185, 155, 104, 0.11); font: 13px/1.6 "SFMono-Regular", Consolas, monospace; }
+.order-mode { display: flex; gap: 12px; margin-bottom: 8px; }
+.order-mode label { display: flex; align-items: center; gap: 6px; }
+.order-mode input { width: auto; min-height: auto; margin: 0; accent-color: var(--brand); }
 .positions, .orders { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
 .position-card, .order-card { border: 1px solid var(--line); border-radius: 16px; padding: 11px; font-size: 13px; background: rgba(255, 255, 255, 0.18); }
 .position-card strong, .order-card strong { display: block; margin-bottom: 6px; }

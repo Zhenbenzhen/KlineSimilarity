@@ -49,7 +49,7 @@ const ids = [
   "commissionRate", "stampTaxRate", "slippageRate", "capacityRate", "setup", "result", "simulator", "currentDate",
   "totalAsset", "cashAvailable", "frozenCash", "floatingPnl", "modeBadge", "activeTitle", "indicatorSelect", "chart",
   "crosshairInfo", "tabs", "positions", "todayPositions", "orders", "tradeHint", "orderEstimate", "lotInput", "buyBtn", "sellBtn", "cancelOrders",
-  "nextDay", "finishSim", "themeToggle", "halfCash", "selectAll", "randomStart", "symbolSearch", "conditionA", "conditionB", "conditionLogic", "maPeriods", "equityCurve", "backHome",
+  "nextDay", "finishSim", "themeToggle", "halfCash", "selectAll", "randomStart", "symbolSearch", "conditionA", "conditionB", "conditionAValue", "conditionBValue", "conditionLogic", "maPeriods", "indicatorParams", "orderByLots", "orderByAmount", "amountInput", "equityCurve", "reportStart", "reportEnd", "reportMetrics", "backHome",
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement(id)]));
 Object.assign(elements.initialCash, { value: "100000" });
@@ -63,6 +63,12 @@ Object.assign(elements.maPeriods, { value: "5,10,20,60,120,250" });
 Object.assign(elements.conditionA, { value: "any" });
 Object.assign(elements.conditionB, { value: "any" });
 Object.assign(elements.conditionLogic, { value: "and" });
+Object.assign(elements.conditionAValue, { value: "0" });
+Object.assign(elements.conditionBValue, { value: "0" });
+Object.assign(elements.indicatorParams, { value: "12,26,9" });
+Object.assign(elements.orderByLots, { checked: true });
+Object.assign(elements.orderByAmount, { checked: false });
+Object.assign(elements.amountInput, { value: "10000" });
 
 const modeInputs = [new FakeElement(), new FakeElement()];
 modeInputs[0].value = "blind";
@@ -98,6 +104,8 @@ const context = {
   document,
   console,
   alert: (message) => { throw new Error(String(message)); },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
   getComputedStyle: () => ({ getPropertyValue: () => "#888" }),
   devicePixelRatio: 1,
   Set,

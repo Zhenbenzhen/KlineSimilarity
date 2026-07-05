@@ -20,6 +20,31 @@ function maPeriods() {
   return periods.length ? periods.slice(0, 8) : [5, 10, 20, 60, 120, 250];
 }
 
+function indicatorParams(defaults) {
+  const raw = ($("indicatorParams")?.value || defaults.join(",")).split(/[，,\s]+/).map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0);
+  return defaults.map((d, i) => Math.floor(raw[i] || d));
+}
+
+function defaultParamsFor(type) {
+  return { MACD: "12,26,9", KDJ: "9,3,3", RSI: "14", WR: "14", BOLL: "20,2", OBV: "", BIAS: "6,12,24", BRAR: "26" }[type] || "";
+}
+
+function syncIndicatorParams(reset = false) {
+  const input = $("indicatorParams");
+  if (!input) return;
+  input.placeholder = defaultParamsFor($("indicatorSelect")?.value);
+  if (reset) input.value = input.placeholder;
+}
+
+function toast(message) {
+  const box = $("appError");
+  if (!box) return alert(message);
+  box.hidden = false;
+  box.textContent = message;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { box.hidden = true; }, 2600);
+}
+
 function normalizeCode(code) {
   const s = String(code).trim().toUpperCase();
   if (s.endsWith(".XSHG")) return s.replace(".XSHG", ".SH");
@@ -87,28 +112,29 @@ function latestMacdPositive(rows) {
   return dif.at(-1) > dea.at(-1);
 }
 
-function matchCondition(symbolInfo, condition) {
+function matchCondition(symbolInfo, condition, threshold = 0) {
   if (condition === "any") return true;
   const rows = symbolInfo.rows;
   if (rows.length < 60) return false;
   const closes = rows.map((r) => r.close), vols = rows.map((r) => r.volume);
   const ma5 = sma(closes, 5), ma20 = sma(closes, 20), ma60 = sma(closes, 60), vol20 = sma(vols, 20);
   const last = rows.length - 1;
-  if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && ma5[last] > ma20[last];
-  if (condition === "above_ma60") return ma60[last] != null && closes[last] > ma60[last];
+  if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
+  if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
   if (condition === "macd_positive") return latestMacdPositive(rows);
-  if (condition === "rsi_strong") return latestRsi(rows) > 50;
-  if (condition === "volume_expand") return vol20[last] != null && vols[last] > vol20[last];
+  if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
+  if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
   return true;
 }
 
 function visibleSymbols() {
   const keyword = ($("symbolSearch")?.value || "").trim().toLowerCase();
   const a = $("conditionA")?.value || "any", b = $("conditionB")?.value || "any", logic = $("conditionLogic")?.value || "and";
+  const av = Number($("conditionAValue")?.value || 0), bv = Number($("conditionBValue")?.value || 0);
   return state.symbols.filter((s) => {
     if (state.mode === "asset" && keyword && !`${s.symbol} ${s.name}`.toLowerCase().includes(keyword)) return false;
     if (state.mode === "blind") {
-      const ma = matchCondition(s, a), mb = matchCondition(s, b);
+      const ma = matchCondition(s, a, av), mb = matchCondition(s, b, bv);
       if (logic === "and" && !(ma && mb)) return false;
       if (logic === "or" && !(ma || mb)) return false;
     }
@@ -131,7 +157,7 @@ async function setData(payload) {
   if (!Array.isArray(rows)) throw new Error("数据格式错误：需要数组或 { data: [...] }");
   state.raw = normalizeRows(rows);
   state.symbols = groupSymbols(state.raw);
-  state.selected = new Set(state.symbols.filter((s) => s.valid).slice(0, 10).map((s) => s.symbol));
+  state.selected = new Set(state.symbols.filter((s) => s.valid).slice(0, 500).map((s) => s.symbol));
   state.aliases = new Map(state.symbols.map((s, i) => [s.symbol, `标的#${String.fromCharCode(65 + (i % 26))}${Math.floor(i / 26) + 1}`]));
   renderSetup();
 }
@@ -139,7 +165,7 @@ async function setData(payload) {
 function renderSetup() {
   const valid = state.symbols.filter((s) => s.valid).length;
   const visible = visibleSymbols();
-  $("dataStatus").textContent = `已载入 ${state.symbols.length} 个标的，${valid} 个满足至少100个交易日，当前筛选显示 ${visible.length} 个。最多选择20个。`;
+  $("dataStatus").textContent = `已载入 ${state.symbols.length} 个标的，${valid} 个满足至少100个交易日，当前筛选显示 ${visible.length} 个。最多选择500个。`;
   $("symbolList").innerHTML = visible.map((s) => `
     <div class="symbol-item ${s.valid ? "" : "disabled"}">
       <label><input type="checkbox" data-symbol="${s.symbol}" ${state.selected.has(s.symbol) ? "checked" : ""} ${s.valid ? "" : "disabled"} />
@@ -157,7 +183,7 @@ function renderSetup() {
 }
 
 function startSimulation() {
-  const selected = state.symbols.filter((s) => state.selected.has(s.symbol)).slice(0, 20);
+  const selected = state.symbols.filter((s) => state.selected.has(s.symbol)).slice(0, 500);
   const dateSet = new Set(selected.flatMap((s) => s.rows.map((r) => r.date)));
   state.dates = [...dateSet].sort();
   const requested = $("startDate").value || state.dates[0];
@@ -198,14 +224,24 @@ function estimate(symbol, side, lots) {
 }
 
 function placeOrder(side) {
-  const lots = Math.max(1, Math.floor(Number($("lotInput").value) || 1));
+  let lots = Math.max(1, Math.floor(Number($("lotInput").value) || 1));
+  if (side === "buy" && $("orderByAmount")?.checked) {
+    const row = rowAt(state.active);
+    const amount = Math.max(0, Number($("amountInput").value) || 0);
+    if (row && amount > 0) {
+      lots = Math.max(1, Math.floor(amount / (row.close * 100 * (1 + state.settings.slippageRate + state.settings.commissionRate))));
+      $("lotInput").value = lots;
+    }
+  }
   try {
     const e = estimate(state.active, side, lots);
     if (side === "buy" && e.cash > state.cashCents) throw new Error(`可用资金不足，还需 ${money(e.cash - state.cashCents)}`);
     if (side === "sell" && (state.positions.get(state.active)?.shares || 0) < e.shares) throw new Error(`持仓不足，当前仅 ${Math.floor((state.positions.get(state.active)?.shares || 0) / 100)} 手`);
     const done = executeOrder({ side, symbol: state.active, lots });
-    $("tradeHint").textContent = done ? `已按当日收盘价${side === "buy" ? "买入" : "卖出"} ${lots} 手。` : "委托未成交或资金/持仓不足。";
-  } catch (e) { $("tradeHint").textContent = e.message; }
+    const msg = done ? `下单成功：已按当日收盘价${side === "buy" ? "买入" : "卖出"} ${lots} 手。` : "下单未成功：委托未成交或资金/持仓不足。";
+    $("tradeHint").textContent = msg;
+    toast(msg);
+  } catch (e) { $("tradeHint").textContent = e.message; toast(`下单未成功：${e.message}`); }
   renderAll();
 }
 
@@ -253,9 +289,14 @@ function finishSimulation() {
 function updateOrderEstimate() {
   const box = $("orderEstimate");
   if (!box || !state.active) return;
-  const lots = Math.max(1, Math.floor(Number($("lotInput").value) || 1));
+  let lots = Math.max(1, Math.floor(Number($("lotInput").value) || 1));
   const row = rowAt(state.active);
   if (!row) { box.textContent = "该标的今日停牌，不能估算下单金额。"; return; }
+  if ($("orderByAmount")?.checked) {
+    const amount = Math.max(0, Number($("amountInput").value) || 0);
+    lots = Math.max(1, Math.floor(amount / (row.close * 100 * (1 + state.settings.slippageRate + state.settings.commissionRate))));
+    $("lotInput").value = lots;
+  }
   const buy = estimate(state.active, "buy", lots), sell = estimate(state.active, "sell", lots);
   box.innerHTML = `手数 ${lots} / 股数 ${lots * 100}<br>买入需 ${money(buy.cash)}（含佣金和滑点）<br>卖出预计到账 ${money(sell.cash)}（T+1可用）`;
 }
@@ -269,14 +310,14 @@ function calcSeries(rows) {
 function indicator(rows, type) {
   const c = rows.map((r) => r.close), h = rows.map((r) => r.high), l = rows.map((r) => r.low), v = rows.map((r) => r.volume);
   const ema = (n) => { const k = 2 / (n + 1), out = []; c.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
-  if (type === "MACD") { const e12 = ema(12), e26 = ema(26), dif = c.map((_, i) => e12[i] - e26[i]); const dea = []; dif.forEach((x, i) => dea[i] = i ? x * 2 / 10 + dea[i - 1] * 8 / 10 : x); return { lines: [{ name: "DIF", values: dif }, { name: "DEA", values: dea }], bars: dif.map((x, i) => (x - dea[i]) * 2) }; }
-  if (type === "RSI") { let gains = [], losses = []; for (let i = 1; i < c.length; i++) { gains[i] = Math.max(0, c[i] - c[i - 1]); losses[i] = Math.max(0, c[i - 1] - c[i]); } return { lines: [{ name: "RSI14", values: c.map((_, i) => i < 14 ? null : 100 * gains.slice(i - 13, i + 1).reduce((a, b) => a + b, 0) / Math.max(1e-9, gains.slice(i - 13, i + 1).reduce((a, b) => a + b, 0) + losses.slice(i - 13, i + 1).reduce((a, b) => a + b, 0))) }] }; }
-  if (type === "KDJ") { const k = [], d = [], j = []; c.forEach((x, i) => { const lo = Math.min(...l.slice(Math.max(0, i - 8), i + 1)), hi = Math.max(...h.slice(Math.max(0, i - 8), i + 1)); const rsv = (x - lo) / Math.max(1e-9, hi - lo) * 100; k[i] = (i ? k[i - 1] * 2 : 50) / 3 + rsv / 3; d[i] = (i ? d[i - 1] * 2 : 50) / 3 + k[i] / 3; j[i] = 3 * k[i] - 2 * d[i]; }); return { lines: [{ name: "K", values: k }, { name: "D", values: d }, { name: "J", values: j }] }; }
-  if (type === "WR") return { lines: [{ name: "WR14", values: c.map((x, i) => { const lo = Math.min(...l.slice(Math.max(0, i - 13), i + 1)), hi = Math.max(...h.slice(Math.max(0, i - 13), i + 1)); return -100 * (hi - x) / Math.max(1e-9, hi - lo); }) }] };
+  if (type === "MACD") { const [fast, slow, signal] = indicatorParams([12, 26, 9]); const e12 = ema(fast), e26 = ema(slow), dif = c.map((_, i) => e12[i] - e26[i]); const dea = []; const k = 2 / (signal + 1); dif.forEach((x, i) => dea[i] = i ? x * k + dea[i - 1] * (1 - k) : x); return { lines: [{ name: "DIF", values: dif }, { name: "DEA", values: dea }], bars: dif.map((x, i) => (x - dea[i]) * 2) }; }
+  if (type === "RSI") { const [n] = indicatorParams([14]); let gains = [], losses = []; for (let i = 1; i < c.length; i++) { gains[i] = Math.max(0, c[i] - c[i - 1]); losses[i] = Math.max(0, c[i - 1] - c[i]); } return { lines: [{ name: `RSI${n}`, values: c.map((_, i) => i < n ? null : 100 * gains.slice(i + 1 - n, i + 1).reduce((a, b) => a + b, 0) / Math.max(1e-9, gains.slice(i + 1 - n, i + 1).reduce((a, b) => a + b, 0) + losses.slice(i + 1 - n, i + 1).reduce((a, b) => a + b, 0))) }] }; }
+  if (type === "KDJ") { const [n, kSmooth, dSmooth] = indicatorParams([9, 3, 3]); const k = [], d = [], j = []; c.forEach((x, i) => { const lo = Math.min(...l.slice(Math.max(0, i + 1 - n), i + 1)), hi = Math.max(...h.slice(Math.max(0, i + 1 - n), i + 1)); const rsv = (x - lo) / Math.max(1e-9, hi - lo) * 100; k[i] = (i ? k[i - 1] * (kSmooth - 1) : 50) / kSmooth + rsv / kSmooth; d[i] = (i ? d[i - 1] * (dSmooth - 1) : 50) / dSmooth + k[i] / dSmooth; j[i] = 3 * k[i] - 2 * d[i]; }); return { lines: [{ name: "K", values: k }, { name: "D", values: d }, { name: "J", values: j }] }; }
+  if (type === "WR") { const [n] = indicatorParams([14]); return { lines: [{ name: `WR${n}`, values: c.map((x, i) => { const lo = Math.min(...l.slice(Math.max(0, i + 1 - n), i + 1)), hi = Math.max(...h.slice(Math.max(0, i + 1 - n), i + 1)); return -100 * (hi - x) / Math.max(1e-9, hi - lo); }) }] }; }
   if (type === "OBV") { const out = [0]; for (let i = 1; i < c.length; i++) out[i] = out[i - 1] + (c[i] > c[i - 1] ? v[i] : c[i] < c[i - 1] ? -v[i] : 0); return { lines: [{ name: "OBV", values: out }] }; }
-  if (type === "BIAS") { const m = Object.fromEntries([6, 12, 24].map((n) => [n, sma(c, n)])); return { lines: [6, 12, 24].map((n) => ({ name: `BIAS${n}`, values: c.map((x, i) => m[n]?.[i] ? (x - m[n][i]) / m[n][i] * 100 : null) })) }; }
-  if (type === "BRAR") { const br = c.map((_, i) => i < 26 ? null : h.slice(i - 25, i + 1).reduce((a, x, j) => a + x - c[i - 26 + j], 0) / Math.max(1e-9, c.slice(i - 26, i).reduce((a, x, j) => a + x - l[i - 25 + j], 0)) * 100); return { lines: [{ name: "BR", values: br }] }; }
-  if (type === "BOLL") { const ma = sma(c, 20); const up = c.map((_, i) => { if (i < 19) return null; const arr = c.slice(i - 19, i + 1), m = ma[i], sd = Math.sqrt(arr.reduce((a, x) => a + (x - m) ** 2, 0) / 20); return m + 2 * sd; }); return { overlay: [{ name: "BOLL", values: ma }, { name: "UP", values: up }, { name: "LOW", values: up.map((x, i) => x == null ? null : ma[i] * 2 - x) }] }; }
+  if (type === "BIAS") { const periods = indicatorParams([6, 12, 24]); const m = Object.fromEntries(periods.map((n) => [n, sma(c, n)])); return { lines: periods.map((n) => ({ name: `BIAS${n}`, values: c.map((x, i) => m[n]?.[i] ? (x - m[n][i]) / m[n][i] * 100 : null) })) }; }
+  if (type === "BRAR") { const [n] = indicatorParams([26]); const br = c.map((_, i) => i < n ? null : h.slice(i + 1 - n, i + 1).reduce((a, x, j) => a + x - c[i - n + j], 0) / Math.max(1e-9, c.slice(i - n, i).reduce((a, x, j) => a + x - l[i + 1 - n + j], 0)) * 100); return { lines: [{ name: "BR", values: br }] }; }
+  if (type === "BOLL") { const [n, mlt] = indicatorParams([20, 2]); const ma = sma(c, n); const up = c.map((_, i) => { if (i < n - 1) return null; const arr = c.slice(i + 1 - n, i + 1), m = ma[i], sd = Math.sqrt(arr.reduce((a, x) => a + (x - m) ** 2, 0) / n); return m + mlt * sd; }); return { overlay: [{ name: "BOLL", values: ma }, { name: "UP", values: up }, { name: "LOW", values: up.map((x, i) => x == null ? null : ma[i] * 2 - x) }] }; }
   return { volume: true };
 }
 
@@ -295,7 +336,8 @@ function drawChart() {
   const baseY = topH + gap, vmax = Math.max(...view.map((r) => r.volume));
   view.forEach((r, i) => { ctx.fillStyle = r.close >= r.open ? css("--up") : css("--down"); ctx.globalAlpha = 0.55; ctx.fillRect(x(i), baseY + volH - r.volume / Math.max(1, vmax) * volH, bw, r.volume / Math.max(1, vmax) * volH); ctx.globalAlpha = 1; });
   const indY = baseY + volH + gap;
-  if (ind.bars) drawBars(ctx, ind.bars.slice(-view.length), x, indY, indH, bw); else ind.lines?.forEach((l, i) => drawIndicatorLine(ctx, l.values.slice(-view.length), x, indY, indH, ["#6c9bcf", "#ff9a62", "#b192d4"][i]));
+  if (ind.bars) drawBars(ctx, ind.bars.slice(-view.length), x, indY, indH, bw);
+  ind.lines?.forEach((l, i) => drawIndicatorLine(ctx, l.values.slice(-view.length), x, indY, indH, ["#6c9bcf", "#ff9a62", "#b192d4"][i]));
   ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${view[0].date} - ${view.at(-1).date}`, pad, h - 8); ctx.fillText(max.toFixed(2), w - 42, 20); ctx.fillText(min.toFixed(2), w - 42, topH - 4);
   ctx.fillText("VOL", pad, baseY + 12); ctx.fillText(type, pad, indY + 12);
 }
@@ -334,7 +376,7 @@ function renderResult() {
   const best = Math.max(0, ...returns), worst = Math.min(0, ...returns);
   $("result").classList.remove("hidden");
   $("simulator").classList.add("hidden");
-  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="result-grid">
+  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="setup-grid"><label>报告起始日<input id="reportStart" type="date" value="${state.equity[0]?.date || ""}" /></label><label>报告结束日<input id="reportEnd" type="date" value="${state.equity.at(-1)?.date || ""}" /></label></div><div id="reportMetrics" class="result-grid">
     <div class="metric"><span>总收益率</span><strong class="${last >= first ? "up" : "down"}">${pct(last / first - 1)}</strong></div>
     <div class="metric"><span>年化收益率</span><strong class="${annual >= 0 ? "up" : "down"}">${pct(annual)}</strong></div>
     <div class="metric"><span>年化波动率</span><strong>${pct(vol)}</strong></div>
@@ -349,20 +391,59 @@ function renderResult() {
     <div class="metric"><span>累计费用</span><strong>${money(state.trades.reduce((a, t) => a + t.fees, 0))}</strong></div>
     <div class="metric"><span>最终资产</span><strong>${money(last)}</strong></div>
   </div><canvas id="equityCurve" class="equity-curve" width="1200" height="260"></canvas><div class="report-actions"><button id="backHome" type="button">返回首页</button></div>`;
-  drawEquityCurve();
+  updateReportRange();
+  $("reportStart").addEventListener("change", updateReportRange);
+  $("reportEnd").addEventListener("change", updateReportRange);
   $("backHome").addEventListener("click", () => { $("result").classList.add("hidden"); $("setup").classList.remove("hidden"); renderSetup(); });
 }
 
-function drawEquityCurve() {
+function reportStats(equity) {
+  const first = equity[0]?.total || 1, last = equity.at(-1)?.total || first;
+  let peak = first, maxDd = 0;
+  const drawdowns = equity.map((e) => { peak = Math.max(peak, e.total); const dd = e.total / peak - 1; maxDd = Math.min(maxDd, dd); return { date: e.date, value: dd }; });
+  const returns = equity.slice(1).map((e, i) => e.total / equity[i].total - 1).filter(Number.isFinite);
+  const avg = returns.reduce((a, b) => a + b, 0) / Math.max(1, returns.length);
+  const vol = Math.sqrt(returns.reduce((a, b) => a + (b - avg) ** 2, 0) / Math.max(1, returns.length - 1)) * Math.sqrt(252);
+  const annual = (last / first) ** (252 / Math.max(1, returns.length)) - 1;
+  const downside = returns.filter((r) => r < 0);
+  const downsideVol = Math.sqrt(downside.reduce((a, b) => a + b ** 2, 0) / Math.max(1, downside.length)) * Math.sqrt(252);
+  return { first, last, returns, drawdowns, maxDd, vol, annual, downsideVol, sharpe: vol ? annual / vol : 0, sortino: downsideVol ? annual / downsideVol : 0, calmar: maxDd ? annual / Math.abs(maxDd) : 0, best: Math.max(0, ...returns), worst: Math.min(0, ...returns) };
+}
+
+function updateReportRange() {
+  const start = $("reportStart")?.value || "0000-00-00", end = $("reportEnd")?.value || "9999-99-99";
+  const range = state.equity.filter((e) => e.date >= start && e.date <= end);
+  const s = reportStats(range.length >= 2 ? range : state.equity);
+  $("reportMetrics").innerHTML = `
+    <div class="metric"><span>区间收益率</span><strong class="${s.last >= s.first ? "up" : "down"}">${pct(s.last / s.first - 1)}</strong></div>
+    <div class="metric"><span>年化收益率</span><strong class="${s.annual >= 0 ? "up" : "down"}">${pct(s.annual)}</strong></div>
+    <div class="metric"><span>年化波动率</span><strong>${pct(s.vol)}</strong></div>
+    <div class="metric"><span>夏普比率</span><strong>${s.sharpe.toFixed(2)}</strong></div>
+    <div class="metric"><span>卡玛比率</span><strong>${s.calmar.toFixed(2)}</strong></div>
+    <div class="metric"><span>索提诺比率</span><strong>${s.sortino.toFixed(2)}</strong></div>
+    <div class="metric"><span>下行波动率</span><strong>${pct(s.downsideVol)}</strong></div>
+    <div class="metric"><span>最大回撤</span><strong class="down">${pct(s.maxDd)}</strong></div>
+    <div class="metric"><span>最佳单日</span><strong class="up">${pct(s.best)}</strong></div>
+    <div class="metric"><span>最差单日</span><strong class="down">${pct(s.worst)}</strong></div>
+    <div class="metric"><span>交易笔数</span><strong>${state.trades.length}</strong></div>
+    <div class="metric"><span>累计费用</span><strong>${money(state.trades.reduce((a, t) => a + t.fees, 0))}</strong></div>`;
+  drawEquityCurve(range.length >= 2 ? range : state.equity, s.drawdowns);
+}
+
+function drawEquityCurve(equity = state.equity, drawdowns = reportStats(equity).drawdowns) {
   const canvas = $("equityCurve"); if (!canvas) return;
   const ctx = canvas.getContext("2d"), rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(900, Math.floor(rect.width || 900)); canvas.height = Math.floor(rect.height || 260);
-  const w = canvas.width, h = canvas.height, vals = state.equity.map((e) => e.total);
+  const w = canvas.width, h = canvas.height, vals = equity.map((e) => e.total);
   const max = Math.max(...vals), min = Math.min(...vals), pad = 28;
   ctx.clearRect(0, 0, w, h); ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
   ctx.strokeStyle = css("--brand"); ctx.lineWidth = 2; ctx.beginPath();
-  vals.forEach((v, i) => { const x = pad + i / Math.max(1, vals.length - 1) * (w - pad * 2), y = pad + (max - v) / Math.max(1, max - min) * (h - pad * 2); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-  ctx.stroke(); ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`起始 ${money(vals[0] || 0)}  结束 ${money(vals.at(-1) || 0)}`, pad, 18);
+  vals.forEach((v, i) => { const x = pad + i / Math.max(1, vals.length - 1) * (w - pad * 2), y = pad + (max - v) / Math.max(1, max - min) * (h * 0.6 - pad); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+  ctx.strokeStyle = css("--down"); ctx.beginPath();
+  drawdowns.forEach((d, i) => { const x = pad + i / Math.max(1, drawdowns.length - 1) * (w - pad * 2), y = h * 0.7 + Math.abs(d.value) / Math.max(0.01, Math.abs(Math.min(...drawdowns.map((x) => x.value)))) * (h * 0.22); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+  ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${equity[0]?.date || ""} ${money(vals[0] || 0)}  -  ${equity.at(-1)?.date || ""} ${money(vals.at(-1) || 0)}`, pad, 18); ctx.fillText("净值曲线 / 回撤曲线", pad, h - 10);
 }
 
 function showError(error) {
@@ -385,21 +466,23 @@ $("fileInput").addEventListener("change", async (e) => {
   }
 });
 document.querySelectorAll("input[name=mode]").forEach((el) => el.addEventListener("change", () => { state.mode = el.value; document.querySelectorAll(".mode-card").forEach((c) => c.classList.toggle("selected", c.querySelector("input").checked)); renderSetup(); }));
-[$("symbolSearch"), $("conditionA"), $("conditionB"), $("conditionLogic")].forEach((el) => el?.addEventListener("input", renderSetup));
-[$("conditionA"), $("conditionB"), $("conditionLogic")].forEach((el) => el?.addEventListener("change", renderSetup));
-$("symbolList").addEventListener("change", (e) => { const sym = e.target.dataset.symbol; if (!sym) return; e.target.checked ? state.selected.add(sym) : state.selected.delete(sym); if (state.selected.size > 20) { state.selected.delete(sym); e.target.checked = false; alert("最多选择20个标的"); } renderSetup(); });
-$("selectAll").addEventListener("click", () => { state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 20).map((s) => s.symbol)); renderSetup(); });
+[$("symbolSearch"), $("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("input", renderSetup));
+[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("change", renderSetup));
+$("symbolList").addEventListener("change", (e) => { const sym = e.target.dataset.symbol; if (!sym) return; e.target.checked ? state.selected.add(sym) : state.selected.delete(sym); if (state.selected.size > 500) { state.selected.delete(sym); e.target.checked = false; alert("最多选择500个标的"); } renderSetup(); });
+$("selectAll").addEventListener("click", () => { state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 500).map((s) => s.symbol)); renderSetup(); });
 $("randomStart").addEventListener("click", () => { const min = new Date($("startDate").min), max = new Date($("startDate").max); if (!Number.isFinite(min.getTime()) || !Number.isFinite(max.getTime())) return; $("startDate").value = new Date(min.getTime() + Math.random() * (max - min)).toISOString().slice(0, 10); });
 $("startSim").addEventListener("click", startSimulation);
 $("tabs").addEventListener("click", (e) => { if (e.target.dataset.tab) { state.active = e.target.dataset.tab; renderAll(); } });
 $("buyBtn").addEventListener("click", () => placeOrder("buy")); $("sellBtn").addEventListener("click", () => placeOrder("sell"));
 $("cancelOrders").addEventListener("click", () => { $("tradeHint").textContent = "提示已清空。"; }); $("nextDay").addEventListener("click", nextDay); $("finishSim").addEventListener("click", () => finishSimulation());
-$("indicatorSelect").addEventListener("change", drawChart); $("maPeriods").addEventListener("input", drawChart); $("themeToggle").addEventListener("click", () => { document.body.classList.toggle("dark"); $("themeToggle").textContent = document.body.classList.contains("dark") ? "亮色" : "深色"; drawChart(); });
-$("lotInput").addEventListener("input", updateOrderEstimate);
+$("indicatorSelect").addEventListener("change", () => { syncIndicatorParams(true); drawChart(); }); $("maPeriods").addEventListener("input", drawChart); $("indicatorParams").addEventListener("input", drawChart); $("themeToggle").addEventListener("click", () => { document.body.classList.toggle("dark"); $("themeToggle").textContent = document.body.classList.contains("dark") ? "亮色" : "深色"; drawChart(); });
+[$("lotInput"), $("amountInput"), $("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("input", updateOrderEstimate));
+[$("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("change", updateOrderEstimate));
 document.querySelectorAll(".lot-quick").forEach((b) => b.addEventListener("click", () => { $("lotInput").value = b.dataset.lots; updateOrderEstimate(); }));
 $("halfCash").addEventListener("click", () => { const r = rowAt(state.active); if (r) { $("lotInput").value = Math.max(1, Math.floor(fromCents(state.cashCents) * 0.5 / r.close / 100)); updateOrderEstimate(); } });
 $("chart").addEventListener("mousemove", (e) => { const rows = rowsOf(state.active).filter((r) => r.date <= state.dates[state.index]).slice(-120); if (!rows.length) return; const rect = e.currentTarget.getBoundingClientRect(), i = Math.max(0, Math.min(rows.length - 1, Math.floor((e.clientX - rect.left - 46) / ((rect.width - 69) / rows.length)))); const r = rows[i]; $("crosshairInfo").textContent = `${r.date} 开:${r.open.toFixed(2)} 高:${r.high.toFixed(2)} 低:${r.low.toFixed(2)} 收:${r.close.toFixed(2)} 量:${Math.round(r.volume).toLocaleString()} 涨跌幅:${pct(r.close / r.pre_close - 1)}`; });
 window.addEventListener("resize", () => state.active && drawChart());
+syncIndicatorParams(false);
 loadSample().catch(showError);
 }
 
