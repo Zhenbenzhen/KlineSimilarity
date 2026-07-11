@@ -125,7 +125,7 @@ vm.runInContext(await readFile("data/sample-data.js", "utf8"), context);
 vm.runInContext(await readFile("app.js", "utf8"), context);
 
 await elements.loadSample.dispatch("click");
-if (!elements.dataStatus.textContent.includes("已载入 10 个标的")) throw new Error("sample data did not load");
+if (!/已载入 \d+ 个标的/.test(elements.dataStatus.textContent)) throw new Error("sample data did not load");
 
 await elements.startSim.dispatch("click");
 if (elements.currentDate.textContent === "-") throw new Error("simulation did not start");

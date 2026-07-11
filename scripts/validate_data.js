@@ -3,7 +3,23 @@ import { readFile } from "node:fs/promises";
 const file = process.argv[2] || "data/a_share_daily_10y.json";
 const required = ["symbol", "name", "date", "open", "high", "low", "close", "volume", "pre_close"];
 const payload = JSON.parse(await readFile(file, "utf8"));
-const rows = Array.isArray(payload) ? payload : payload.data;
+let rows = Array.isArray(payload) ? payload : payload.data;
+if (payload?.symbols && Array.isArray(payload.symbols)) {
+  rows = payload.symbols.flatMap(([symbol, name, series]) => series.map((row) => ({
+    symbol,
+    name,
+    date: row[0],
+    open: row[1],
+    high: row[2],
+    low: row[3],
+    close: row[4],
+    volume: row[5],
+    pre_close: row[6],
+  })));
+}
+if (payload?.columns && Array.isArray(rows) && Array.isArray(rows[0])) {
+  rows = rows.map((row) => Object.fromEntries(payload.columns.map((key, index) => [key, row[index]])));
+}
 if (!Array.isArray(rows)) throw new Error("data must be an array or {data: array}");
 
 const missing = required.filter((key) => rows.some((row) => !(key in row)));

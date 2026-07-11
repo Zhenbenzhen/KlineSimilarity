@@ -121,7 +121,15 @@ function matchCondition(symbolInfo, condition, threshold = 0) {
   const last = rows.length - 1;
   if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
   if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
-  if (condition === "macd_positive") return latestMacdPositive(rows);
+  if (condition === "macd_positive") {
+    if (!latestMacdPositive(rows)) return false;
+    const c = rows.map((r) => r.close);
+    const ema = (n) => { const k = 2 / (n + 1), out = []; c.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
+    const e12 = ema(12), e26 = ema(26), dif = c.map((_, i) => e12[i] - e26[i]);
+    const dea = [];
+    dif.forEach((x, i) => dea[i] = i ? x * 0.2 + dea[i - 1] * 0.8 : x);
+    return threshold <= 0 || (dif.at(-1) - dea.at(-1)) / Math.max(0.01, c.at(-1)) * 100 >= threshold;
+  }
   if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
   if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
   return true;
@@ -142,6 +150,11 @@ function visibleSymbols() {
   });
 }
 
+function applyBlindFilterSelection() {
+  if (state.mode !== "blind") return;
+  state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 500).map((s) => s.symbol));
+}
+
 async function loadSample() {
   if (window.KLINE_SAMPLE_DATA) {
     await setData(window.KLINE_SAMPLE_DATA);
@@ -153,7 +166,23 @@ async function loadSample() {
 }
 
 async function setData(payload) {
-  const rows = Array.isArray(payload) ? payload : payload.data;
+  let rows = Array.isArray(payload) ? payload : payload.data;
+  if (payload?.symbols && Array.isArray(payload.symbols)) {
+    rows = payload.symbols.flatMap(([symbol, name, series]) => series.map((row) => ({
+      symbol,
+      name,
+      date: row[0],
+      open: row[1],
+      high: row[2],
+      low: row[3],
+      close: row[4],
+      volume: row[5],
+      pre_close: row[6],
+    })));
+  }
+  if (payload?.columns && Array.isArray(rows) && Array.isArray(rows[0])) {
+    rows = rows.map((row) => Object.fromEntries(payload.columns.map((key, index) => [key, row[index]])));
+  }
   if (!Array.isArray(rows)) throw new Error("数据格式错误：需要数组或 { data: [...] }");
   state.raw = normalizeRows(rows);
   state.symbols = groupSymbols(state.raw);
@@ -169,7 +198,7 @@ function renderSetup() {
   $("symbolList").innerHTML = visible.map((s) => `
     <div class="symbol-item ${s.valid ? "" : "disabled"}">
       <label><input type="checkbox" data-symbol="${s.symbol}" ${state.selected.has(s.symbol) ? "checked" : ""} ${s.valid ? "" : "disabled"} />
-        <span><strong>${s.name} ${s.symbol}</strong><span class="symbol-meta">${s.start} - ${s.end} / ${s.count} 日${s.valid ? "" : " / 交易日不足"}</span></span>
+        <span><strong>${state.mode === "blind" ? state.aliases.get(s.symbol) : `${s.name} ${s.symbol}`}</strong><span class="symbol-meta">${s.start} - ${s.end} / ${s.count} 日${s.valid ? "" : " / 交易日不足"}</span></span>
       </label>
     </div>`).join("");
   $("symbolList").innerHTML ||= `<div class="notice">没有符合筛选条件的标的。</div>`;
@@ -466,8 +495,9 @@ $("fileInput").addEventListener("change", async (e) => {
   }
 });
 document.querySelectorAll("input[name=mode]").forEach((el) => el.addEventListener("change", () => { state.mode = el.value; document.querySelectorAll(".mode-card").forEach((c) => c.classList.toggle("selected", c.querySelector("input").checked)); renderSetup(); }));
-[$("symbolSearch"), $("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("input", renderSetup));
-[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("change", renderSetup));
+$("symbolSearch")?.addEventListener("input", renderSetup);
+[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("input", () => { applyBlindFilterSelection(); renderSetup(); }));
+[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("change", () => { applyBlindFilterSelection(); renderSetup(); }));
 $("symbolList").addEventListener("change", (e) => { const sym = e.target.dataset.symbol; if (!sym) return; e.target.checked ? state.selected.add(sym) : state.selected.delete(sym); if (state.selected.size > 500) { state.selected.delete(sym); e.target.checked = false; alert("最多选择500个标的"); } renderSetup(); });
 $("selectAll").addEventListener("click", () => { state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 500).map((s) => s.symbol)); renderSetup(); });
 $("randomStart").addEventListener("click", () => { const min = new Date($("startDate").min), max = new Date($("startDate").max); if (!Number.isFinite(min.getTime()) || !Number.isFinite(max.getTime())) return; $("startDate").value = new Date(min.getTime() + Math.random() * (max - min)).toISOString().slice(0, 10); });
