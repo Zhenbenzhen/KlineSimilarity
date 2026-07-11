@@ -201,8 +201,8 @@ body.dark .setup-hero { background: radial-gradient(circle at right, rgba(126, 1
 .status-bar div { display: grid; gap: 5px; min-width: 130px; }
 .status-bar span { color: var(--muted); font-size: 12px; }
 .status-bar strong, .mono { font-family: "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
-.workspace { align-items: stretch; }
-.chart-card { flex: 1 1 70%; padding: 16px; min-width: 0; }
+.workspace { display: grid; grid-template-columns: 220px 1fr 340px; gap: 16px; align-items: stretch; }
+.chart-card { padding: 16px; min-width: 0; }
 .chart-head { justify-content: space-between; margin-bottom: 12px; align-items: end; }
 .chart-controls { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(140px, 0.8fr) minmax(130px, 0.7fr); gap: 10px; min-width: min(640px, 58vw); }
 #chart {
@@ -223,6 +223,11 @@ body.dark #chart { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04)
 .side { flex: 1 1 30%; max-width: 420px; padding: 18px; display: grid; gap: 22px; align-content: start; }
 .side section { padding-bottom: 16px; border-bottom: 1px solid var(--soft-line); }
 .side section:last-child { border-bottom: 0; padding-bottom: 0; }
+.sim-filter-rail { padding: 16px; display: grid; gap: 10px; align-content: start; }
+.sim-filter-rail h3 { margin-bottom: 2px; }
+.filter-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+.filter-summary { padding: 8px 12px; border: 1px solid var(--soft-line); border-radius: 12px; background: rgba(98, 133, 168, 0.08); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.filter-actions { display: grid; gap: 8px; margin-top: 4px; }
 .quick-row button, .trade-actions button { flex: 1; }
 .quick-row { margin: 10px 0; }
 .trade-actions { margin-top: 10px; }
@@ -250,6 +255,7 @@ body.dark #chart { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04)
   .top-actions { flex-wrap: wrap; }
   .top-actions button, .file-button { flex: 1 1 140px; }
   .mode-grid, .setup-grid, .filter-panel, .blind-filter, .chart-controls { grid-template-columns: 1fr; min-width: 0; }
+  .sim-filter-rail { max-height: 320px; overflow: auto; }
   .side { max-width: none; }
   #chart { height: 56vh; }
   .status-bar div { min-width: 0; }

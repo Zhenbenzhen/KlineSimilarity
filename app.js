@@ -3,7 +3,8 @@ const MA_COLORS = { 5: "#ff9a62", 10: "#6c9bcf", 20: "#b192d4", 60: "#79b8a3", 1
 const EXTRA_MA_COLORS = ["#ff9a62", "#6c9bcf", "#b192d4", "#79b8a3", "#a8b5c0", "#c0a8a8", "#b99b68", "#8c9dab"];
 const state = {
   raw: [], symbols: [], selected: new Set(), mode: "blind", aliases: new Map(), active: null,
-  index: 0, dates: [], settings: {}, cashCents: 0, frozen: [], positions: new Map(), pending: [], trades: [], equity: [], finished: false, todayTrades: []
+  index: 0, dates: [], settings: {}, cashCents: 0, frozen: [], positions: new Map(), pending: [], trades: [], equity: [], finished: false, todayTrades: [],
+  simFilterActive: false, simFilterA: "any", simFilterAValue: 0, simFilterLogic: "and", simFilterB: "any", simFilterBValue: 0
 };
 
 const $ = (id) => document.getElementById(id);
@@ -121,6 +122,7 @@ function matchCondition(symbolInfo, condition, threshold = 0) {
   const last = rows.length - 1;
   if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
   if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
+  if (condition === "price_above_ma5") return ma5[last] != null && (closes[last] / ma5[last] - 1) * 100 >= threshold;
   if (condition === "macd_positive") {
     if (!latestMacdPositive(rows)) return false;
     const c = rows.map((r) => r.close);
@@ -133,6 +135,43 @@ function matchCondition(symbolInfo, condition, threshold = 0) {
   if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
   if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
   return true;
+}
+
+function matchConditionDateAware(symbolInfo, condition, threshold, currentDate) {
+  if (condition === "any") return true;
+  const rows = symbolInfo.rows.filter((r) => r.date <= currentDate);
+  if (rows.length < 60) return false;
+  const closes = rows.map((r) => r.close), vols = rows.map((r) => r.volume);
+  const ma5 = sma(closes, 5), ma20 = sma(closes, 20), ma60 = sma(closes, 60), vol20 = sma(vols, 20);
+  const last = rows.length - 1;
+  if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
+  if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
+  if (condition === "price_above_ma5") return ma5[last] != null && (closes[last] / ma5[last] - 1) * 100 >= threshold;
+  if (condition === "macd_positive") {
+    const c = rows.map((r) => r.close);
+    const ema = (n) => { const k = 2 / (n + 1), out = []; c.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
+    const e12 = ema(12), e26 = ema(26), dif = c.map((_, i) => e12[i] - e26[i]);
+    const dea = [];
+    dif.forEach((x, i) => dea[i] = i ? x * 0.2 + dea[i - 1] * 0.8 : x);
+    if (dif.at(-1) <= dea.at(-1)) return false;
+    return threshold <= 0 || (dif.at(-1) - dea.at(-1)) / Math.max(0.01, c.at(-1)) * 100 >= threshold;
+  }
+  if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
+  if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
+  return true;
+}
+
+function simFilteredList() {
+  if (!state.simFilterActive) return selectedSymbols();
+  const a = state.simFilterA, b = state.simFilterB, logic = state.simFilterLogic;
+  const av = state.simFilterAValue, bv = state.simFilterBValue;
+  const currentDate = state.dates[state.index];
+  return selectedSymbols().filter((s) => {
+    const ma = matchConditionDateAware(s, a, av, currentDate);
+    const mb = matchConditionDateAware(s, b, bv, currentDate);
+    if (logic === "and") return ma && mb;
+    return ma || mb;
+  });
 }
 
 function visibleSymbols() {
@@ -380,7 +419,8 @@ function renderAll() {
   $("currentDate").textContent = state.dates[state.index] || "-"; $("totalAsset").textContent = money(total); $("cashAvailable").textContent = money(state.cashCents); $("frozenCash").textContent = money(frozenCents());
   $("floatingPnl").textContent = `${pnl >= 0 ? "+" : ""}${money(pnl)}`; $("floatingPnl").className = pnl >= 0 ? "up" : "down";
   $("modeBadge").textContent = state.mode === "blind" ? "盲选模式" : "资产配置模式"; $("activeTitle").textContent = label(state.active);
-  $("tabs").innerHTML = selectedSymbols().map((s) => `<button class="tab ${s.symbol === state.active ? "active" : ""}" data-tab="${s.symbol}">${label(s.symbol)}</button>`).join("");
+  $("tabs").innerHTML = simFilteredList().map((s) => `<button class="tab ${s.symbol === state.active ? "active" : ""}" data-tab="${s.symbol}">${label(s.symbol)}</button>`).join("");
+  if (state.simFilterActive && !simFilteredList().find((s) => s.symbol === state.active) && simFilteredList().length) { state.active = simFilteredList()[0].symbol; }
   $("positions").innerHTML = [...state.positions].map(([sym, p]) => { const val = toCents(lastPrice(sym)) * p.shares, pnl = val - p.costCents; return `<div class="position-card"><strong>${label(sym)}</strong><span>${p.shares / 100}手 / 市值 ${money(val)}</span><br><span class="${pnl >= 0 ? "up" : "down"}">盈亏 ${money(pnl)} ${pct(pnl / Math.max(1, p.costCents))}</span></div>`; }).join("") || "暂无持仓";
   $("todayPositions").innerHTML = state.todayTrades.filter((t) => t.side === "buy").map((t) => `<div class="position-card"><strong>${label(t.symbol)}</strong><span>今日买入 ${t.lots}手 @ ${t.price.toFixed(2)}</span><br><span>成交额 ${money(t.amount)}</span></div>`).join("") || "暂无当日成交持仓";
   $("orders").innerHTML = state.trades.slice(-20).reverse().map((t) => `<div class="order-card"><strong>${t.date} ${label(t.symbol)}</strong>${t.side === "buy" ? "买入" : "卖出"} ${t.lots}手 @ ${t.price.toFixed(2)} / 费用 ${money(t.fees)}</div>`).join("") || "暂无交易";
@@ -475,6 +515,32 @@ function drawEquityCurve(equity = state.equity, drawdowns = reportStats(equity).
   ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${equity[0]?.date || ""} ${money(vals[0] || 0)}  -  ${equity.at(-1)?.date || ""} ${money(vals.at(-1) || 0)}`, pad, 18); ctx.fillText("净值曲线 / 回撤曲线", pad, h - 10);
 }
 
+function applySimFilter() {
+  state.simFilterActive = true;
+  state.simFilterA = $("simFilterA")?.value || "any";
+  state.simFilterAValue = Number($("simFilterAValue")?.value || 0);
+  state.simFilterLogic = $("simFilterLogic")?.value || "and";
+  state.simFilterB = $("simFilterB")?.value || "any";
+  state.simFilterBValue = Number($("simFilterBValue")?.value || 0);
+  const labels = { any: "不限", ma_bull: "MA5>MA20", above_ma60: "价>MA60", macd_positive: "MACD金叉", rsi_strong: "RSI>50", volume_expand: "量>VOL20", price_above_ma5: "价>MA5" };
+  const aLabel = state.simFilterA === "any" ? "不限" : `${labels[state.simFilterA] || state.simFilterA}(≥${state.simFilterAValue}%)`;
+  const bLabel = state.simFilterB === "any" ? "不限" : `${labels[state.simFilterB] || state.simFilterB}(≥${state.simFilterBValue}%)`;
+  const logicLabel = state.simFilterLogic === "and" ? "AND" : "OR";
+  $("simFilterSummary").textContent = `${aLabel} ${logicLabel} ${bLabel}`;
+  renderAll();
+}
+
+function clearSimFilter() {
+  state.simFilterActive = false;
+  $("simFilterA").value = "any";
+  $("simFilterAValue").value = "0";
+  $("simFilterLogic").value = "and";
+  $("simFilterB").value = "any";
+  $("simFilterBValue").value = "0";
+  $("simFilterSummary").textContent = "不限";
+  renderAll();
+}
+
 function showError(error) {
   const box = $("appError");
   if (!box) return alert(error.message || String(error));
@@ -510,6 +576,8 @@ $("indicatorSelect").addEventListener("change", () => { syncIndicatorParams(true
 [$("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("change", updateOrderEstimate));
 document.querySelectorAll(".lot-quick").forEach((b) => b.addEventListener("click", () => { $("lotInput").value = b.dataset.lots; updateOrderEstimate(); }));
 $("halfCash").addEventListener("click", () => { const r = rowAt(state.active); if (r) { $("lotInput").value = Math.max(1, Math.floor(fromCents(state.cashCents) * 0.5 / r.close / 100)); updateOrderEstimate(); } });
+$("applySimFilter")?.addEventListener("click", applySimFilter);
+$("clearSimFilter")?.addEventListener("click", clearSimFilter);
 $("chart").addEventListener("mousemove", (e) => { const rows = rowsOf(state.active).filter((r) => r.date <= state.dates[state.index]).slice(-120); if (!rows.length) return; const rect = e.currentTarget.getBoundingClientRect(), i = Math.max(0, Math.min(rows.length - 1, Math.floor((e.clientX - rect.left - 46) / ((rect.width - 69) / rows.length)))); const r = rows[i]; $("crosshairInfo").textContent = `${r.date} 开:${r.open.toFixed(2)} 高:${r.high.toFixed(2)} 低:${r.low.toFixed(2)} 收:${r.close.toFixed(2)} 量:${Math.round(r.volume).toLocaleString()} 涨跌幅:${pct(r.close / r.pre_close - 1)}`; });
 window.addEventListener("resize", () => state.active && drawChart());
 syncIndicatorParams(false);

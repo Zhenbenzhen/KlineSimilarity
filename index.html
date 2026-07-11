@@ -126,6 +126,46 @@
           </div>
 
           <div class="workspace">
+            <aside class="sim-filter-rail panel">
+              <h3>每日筛选</h3>
+              <p class="filter-hint">基于当日已知数据筛选标的，不影响已选标的。</p>
+              <label>条件A
+                <select id="simFilterA">
+                  <option value="any">不限</option>
+                  <option value="ma_bull">MA5 高于 MA20</option>
+                  <option value="above_ma60">收盘价高于 MA60</option>
+                  <option value="macd_positive">MACD DIF 高于 DEA</option>
+                  <option value="rsi_strong">RSI14 高于 50</option>
+                  <option value="volume_expand">成交量高于 VOL20</option>
+                  <option value="price_above_ma5">收盘价高于 MA5</option>
+                </select>
+              </label>
+              <label>阈值A<input id="simFilterAValue" type="number" step="0.1" value="0" placeholder="默认 0" /></label>
+              <label>逻辑
+                <select id="simFilterLogic">
+                  <option value="and">AND</option>
+                  <option value="or">OR</option>
+                </select>
+              </label>
+              <label>条件B
+                <select id="simFilterB">
+                  <option value="any">不限</option>
+                  <option value="ma_bull">MA5 高于 MA20</option>
+                  <option value="above_ma60">收盘价高于 MA60</option>
+                  <option value="macd_positive">MACD DIF 高于 DEA</option>
+                  <option value="rsi_strong">RSI14 高于 50</option>
+                  <option value="volume_expand">成交量高于 VOL20</option>
+                  <option value="price_above_ma5">收盘价高于 MA5</option>
+                </select>
+              </label>
+              <label>阈值B<input id="simFilterBValue" type="number" step="0.1" value="0" placeholder="默认 0" /></label>
+              <div id="simFilterSummary" class="filter-summary">不限</div>
+              <div class="filter-actions">
+                <button id="applySimFilter" class="ghost full" type="button">应用筛选</button>
+                <button id="clearSimFilter" class="ghost full" type="button">清除</button>
+              </div>
+            </aside>
+
             <section class="chart-card panel">
               <div class="chart-head">
                 <div>

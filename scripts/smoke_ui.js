@@ -50,6 +50,7 @@ const ids = [
   "totalAsset", "cashAvailable", "frozenCash", "floatingPnl", "modeBadge", "activeTitle", "indicatorSelect", "chart",
   "crosshairInfo", "tabs", "positions", "todayPositions", "orders", "tradeHint", "orderEstimate", "lotInput", "buyBtn", "sellBtn", "cancelOrders",
   "nextDay", "finishSim", "themeToggle", "halfCash", "selectAll", "randomStart", "symbolSearch", "conditionA", "conditionB", "conditionAValue", "conditionBValue", "conditionLogic", "maPeriods", "indicatorParams", "orderByLots", "orderByAmount", "amountInput", "equityCurve", "reportStart", "reportEnd", "reportMetrics", "backHome",
+  "simFilterRail", "simFilterA", "simFilterAValue", "simFilterLogic", "simFilterB", "simFilterBValue", "simFilterSummary", "clearSimFilter", "applySimFilter",
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement(id)]));
 Object.assign(elements.initialCash, { value: "100000" });
@@ -69,6 +70,11 @@ Object.assign(elements.indicatorParams, { value: "12,26,9" });
 Object.assign(elements.orderByLots, { checked: true });
 Object.assign(elements.orderByAmount, { checked: false });
 Object.assign(elements.amountInput, { value: "10000" });
+Object.assign(elements.simFilterA, { value: "any" });
+Object.assign(elements.simFilterAValue, { value: "0" });
+Object.assign(elements.simFilterLogic, { value: "and" });
+Object.assign(elements.simFilterB, { value: "any" });
+Object.assign(elements.simFilterBValue, { value: "0" });
 
 const modeInputs = [new FakeElement(), new FakeElement()];
 modeInputs[0].value = "blind";
@@ -89,6 +95,8 @@ const document = {
   querySelector: (selector) => {
     if (selector === ".asset-filter") return assetFilter;
     if (selector === ".blind-filter") return blindFilter;
+    if (selector === ".sim-filter-rail") return elements.simFilterRail;
+    if (selector === "#simulator .side") return new FakeElement("sim-side");
     return null;
   },
   querySelectorAll: (selector) => {
@@ -133,6 +141,18 @@ if (elements.currentDate.textContent === "-") throw new Error("simulation did no
 await elements.buyBtn.dispatch("click");
 await elements.nextDay.dispatch("click");
 if (elements.orders.innerHTML === "暂无交易") throw new Error("trade flow did not execute");
+
+// Verify simulator three-column layout: filter rail, chart area, order side
+if (!elements.simFilterRail) throw new Error("simulation filter rail missing");
+if (!elements.nextDay) throw new Error("nextDay button missing");
+if (!elements.buyBtn) throw new Error("buy button missing");
+
+// Verify simulation filter rail elements exist and are functional
+if (elements.simFilterA.value !== "any") throw new Error("simFilterA default wrong");
+if (elements.simFilterLogic.value !== "and") throw new Error("simFilterLogic default wrong");
+if (!elements.applySimFilter) throw new Error("applySimFilter button missing");
+if (!elements.clearSimFilter) throw new Error("clearSimFilter button missing");
+if (!elements.simFilterSummary) throw new Error("simFilterSummary missing");
 
 await elements.themeToggle.dispatch("click");
 console.log("UI smoke test passed");
