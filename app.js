@@ -1,10 +1,49 @@
 const REQUIRED = ["symbol", "name", "date", "open", "high", "low", "close", "volume", "pre_close"];
 const MA_COLORS = { 5: "#ff9a62", 10: "#6c9bcf", 20: "#b192d4", 60: "#79b8a3", 120: "#a8b5c0", 250: "#c0a8a8" };
 const EXTRA_MA_COLORS = ["#ff9a62", "#6c9bcf", "#b192d4", "#79b8a3", "#a8b5c0", "#c0a8a8", "#b99b68", "#8c9dab"];
+const INDICATORS = {
+  close:      { label: "收盘价",       group: "价格" },
+  open:       { label: "开盘价",       group: "价格" },
+  high:       { label: "最高价",       group: "价格" },
+  low:        { label: "最低价",       group: "价格" },
+  change_pct: { label: "涨跌幅%",     group: "价格" },
+  volume:     { label: "成交量",       group: "成交量" },
+  vol_ratio:  { label: "量比",         group: "成交量" },
+  ma5:        { label: "MA5",          group: "均线" },
+  ma10:       { label: "MA10",         group: "均线" },
+  ma20:       { label: "MA20",         group: "均线" },
+  ma60:       { label: "MA60",         group: "均线" },
+  ma120:      { label: "MA120",        group: "均线" },
+  ma250:      { label: "MA250",        group: "均线" },
+  close_ma5:  { label: "收盘/MA5%",    group: "均线" },
+  close_ma20: { label: "收盘/MA20%",   group: "均线" },
+  close_ma60: { label: "收盘/MA60%",   group: "均线" },
+  ma5_ma20:   { label: "MA5/MA20%",    group: "均线" },
+  macd_dif:   { label: "MACD DIF",     group: "MACD" },
+  macd_dea:   { label: "MACD DEA",     group: "MACD" },
+  macd_hist:  { label: "MACD柱",       group: "MACD" },
+  rsi14:      { label: "RSI14",        group: "RSI" },
+  kdj_k:      { label: "KDJ K",        group: "KDJ" },
+  kdj_d:      { label: "KDJ D",        group: "KDJ" },
+  kdj_j:      { label: "KDJ J",        group: "KDJ" },
+  wr14:       { label: "WR14",         group: "WR" },
+  bias6:      { label: "BIAS6%",       group: "BIAS" },
+  bias12:     { label: "BIAS12%",      group: "BIAS" },
+  bias24:     { label: "BIAS24%",      group: "BIAS" },
+  boll_mid:   { label: "BOLL中轨",     group: "BOLL" },
+  boll_up:    { label: "BOLL上轨",     group: "BOLL" },
+  boll_low:   { label: "BOLL下轨",     group: "BOLL" },
+  obv:        { label: "OBV",          group: "其他" },
+  br:         { label: "BR",           group: "其他" },
+};
+
 const state = {
   raw: [], symbols: [], selected: new Set(), mode: "blind", aliases: new Map(), active: null,
   index: 0, dates: [], settings: {}, cashCents: 0, frozen: [], positions: new Map(), pending: [], trades: [], equity: [], finished: false, todayTrades: [],
-  simFilterActive: false, simFilterA: "any", simFilterAValue: 0, simFilterLogic: "and", simFilterB: "any", simFilterBValue: 0
+  filter: {
+    setup: { active: false, conditions: [], logic: "and", formula: "" },
+    sim:   { active: false, conditions: [], logic: "and", formula: "" },
+  }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -113,85 +152,206 @@ function latestMacdPositive(rows) {
   return dif.at(-1) > dea.at(-1);
 }
 
-function matchCondition(symbolInfo, condition, threshold = 0) {
-  if (condition === "any") return true;
-  const rows = symbolInfo.rows;
-  if (rows.length < 60) return false;
-  const closes = rows.map((r) => r.close), vols = rows.map((r) => r.volume);
-  const ma5 = sma(closes, 5), ma20 = sma(closes, 20), ma60 = sma(closes, 60), vol20 = sma(vols, 20);
-  const last = rows.length - 1;
-  if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
-  if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
-  if (condition === "price_above_ma5") return ma5[last] != null && (closes[last] / ma5[last] - 1) * 100 >= threshold;
-  if (condition === "macd_positive") {
-    if (!latestMacdPositive(rows)) return false;
-    const c = rows.map((r) => r.close);
-    const ema = (n) => { const k = 2 / (n + 1), out = []; c.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
-    const e12 = ema(12), e26 = ema(26), dif = c.map((_, i) => e12[i] - e26[i]);
-    const dea = [];
-    dif.forEach((x, i) => dea[i] = i ? x * 0.2 + dea[i - 1] * 0.8 : x);
-    return threshold <= 0 || (dif.at(-1) - dea.at(-1)) / Math.max(0.01, c.at(-1)) * 100 >= threshold;
-  }
-  if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
-  if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
-  return true;
+function computeIndicators(rows, dateLimit) {
+  let data = rows;
+  if (dateLimit) data = rows.filter((r) => r.date <= dateLimit);
+  if (data.length < 2) return {};
+  const last = data.length - 1;
+  const closes = data.map((r) => r.close), highs = data.map((r) => r.high), lows = data.map((r) => r.low), vols = data.map((r) => r.volume);
+  const emaCalc = (n) => { const k = 2 / (n + 1), out = []; closes.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
+  const maCalc = (n) => sma(closes, n);
+  const volMa = (n) => sma(vols, n);
+  const e12 = emaCalc(12), e26 = emaCalc(26);
+  const dif = closes.map((_, i) => e12[i] - e26[i]);
+  const dea = []; dif.forEach((x, i) => dea[i] = i ? x * 0.2 + dea[i - 1] * 0.8 : x);
+  const hist = dif.map((x, i) => (x - dea[i]) * 2);
+  let gains = [], losses = [];
+  for (let i = 1; i < closes.length; i++) { gains[i] = Math.max(0, closes[i] - closes[i - 1]); losses[i] = Math.max(0, closes[i - 1] - closes[i]); }
+  const rsiFn = (n) => { if (last < n) return 50; const g = gains.slice(last + 1 - n, last + 1).reduce((a, b) => a + b, 0); const l = losses.slice(last + 1 - n, last + 1).reduce((a, b) => a + b, 0); return 100 * g / Math.max(1e-9, g + l); };
+  const kArr = [], dArr = [], jArr = [];
+  closes.forEach((x, i) => { const lo = Math.min(...lows.slice(Math.max(0, i + 1 - 9), i + 1)), hi = Math.max(...highs.slice(Math.max(0, i + 1 - 9), i + 1)); const rsv = (x - lo) / Math.max(1e-9, hi - lo) * 100; kArr[i] = (i ? kArr[i - 1] * 2 : 50) / 3 + rsv / 3; dArr[i] = (i ? dArr[i - 1] * 2 : 50) / 3 + kArr[i] / 3; jArr[i] = 3 * kArr[i] - 2 * dArr[i]; });
+  const wrFn = (n) => { const lo = Math.min(...lows.slice(last + 1 - n, last + 1)), hi = Math.max(...highs.slice(last + 1 - n, last + 1)); return -100 * (hi - closes[last]) / Math.max(1e-9, hi - lo); };
+  const biasFn = (n) => { const m = maCalc(n); return m[last] != null ? (closes[last] - m[last]) / m[last] * 100 : null; };
+  const bollMa = maCalc(20), bollSd = last >= 19 ? Math.sqrt(closes.slice(last - 19, last + 1).reduce((a, x) => a + (x - bollMa[last]) ** 2, 0) / 20) : 0;
+  const bollUp = bollMa[last] != null ? bollMa[last] + 2 * bollSd : null, bollLow = bollMa[last] != null ? bollMa[last] - 2 * bollSd : null;
+  let obvArr = [0]; for (let i = 1; i < closes.length; i++) obvArr[i] = obvArr[i - 1] + (closes[i] > closes[i - 1] ? vols[i] : closes[i] < closes[i - 1] ? -vols[i] : 0);
+  let brVal = null; if (last >= 26) { let sumUp = 0, sumDn = 0; for (let j = last - 25; j <= last; j++) { sumUp += highs[j] - (j > 0 ? closes[j - 1] : closes[j]); sumDn += (j > 0 ? closes[j - 1] : closes[j]) - lows[j]; } brVal = sumDn > 0 ? sumUp / sumDn * 100 : null; }
+  return {
+    close: closes[last], open: data[last].open, high: highs[last], low: lows[last],
+    change_pct: data[last].pre_close ? (closes[last] / data[last].pre_close - 1) * 100 : 0,
+    volume: vols[last],
+    vol_ratio: volMa(20)[last] != null ? vols[last] / volMa(20)[last] : null,
+    ma5: maCalc(5)[last], ma10: maCalc(10)[last], ma20: maCalc(20)[last],
+    ma60: maCalc(60)[last], ma120: maCalc(120)[last], ma250: maCalc(250)[last],
+    close_ma5: maCalc(5)[last] != null ? (closes[last] / maCalc(5)[last] - 1) * 100 : null,
+    close_ma20: maCalc(20)[last] != null ? (closes[last] / maCalc(20)[last] - 1) * 100 : null,
+    close_ma60: maCalc(60)[last] != null ? (closes[last] / maCalc(60)[last] - 1) * 100 : null,
+    ma5_ma20: maCalc(20)[last] != null && maCalc(5)[last] != null ? (maCalc(5)[last] / maCalc(20)[last] - 1) * 100 : null,
+    macd_dif: dif[last], macd_dea: dea[last], macd_hist: hist[last],
+    rsi14: rsiFn(14), kdj_k: kArr[last], kdj_d: dArr[last], kdj_j: jArr[last],
+    wr14: wrFn(14), bias6: biasFn(6), bias12: biasFn(12), bias24: biasFn(24),
+    boll_mid: bollMa[last], boll_up: bollUp, boll_low: bollLow,
+    obv: obvArr[last], br: brVal,
+  };
 }
 
-function matchConditionDateAware(symbolInfo, condition, threshold, currentDate) {
-  if (condition === "any") return true;
-  const rows = symbolInfo.rows.filter((r) => r.date <= currentDate);
-  if (rows.length < 60) return false;
-  const closes = rows.map((r) => r.close), vols = rows.map((r) => r.volume);
-  const ma5 = sma(closes, 5), ma20 = sma(closes, 20), ma60 = sma(closes, 60), vol20 = sma(vols, 20);
-  const last = rows.length - 1;
-  if (condition === "ma_bull") return ma5[last] != null && ma20[last] != null && (ma5[last] / ma20[last] - 1) * 100 >= threshold;
-  if (condition === "above_ma60") return ma60[last] != null && (closes[last] / ma60[last] - 1) * 100 >= threshold;
-  if (condition === "price_above_ma5") return ma5[last] != null && (closes[last] / ma5[last] - 1) * 100 >= threshold;
-  if (condition === "macd_positive") {
-    const c = rows.map((r) => r.close);
-    const ema = (n) => { const k = 2 / (n + 1), out = []; c.forEach((x, i) => out[i] = i ? x * k + out[i - 1] * (1 - k) : x); return out; };
-    const e12 = ema(12), e26 = ema(26), dif = c.map((_, i) => e12[i] - e26[i]);
-    const dea = [];
-    dif.forEach((x, i) => dea[i] = i ? x * 0.2 + dea[i - 1] * 0.8 : x);
-    if (dif.at(-1) <= dea.at(-1)) return false;
-    return threshold <= 0 || (dif.at(-1) - dea.at(-1)) / Math.max(0.01, c.at(-1)) * 100 >= threshold;
+function tokenizeFormula(formula) {
+  const tokens = [], src = formula.toUpperCase().replace(/\s+/g, " ").trim();
+  let i = 0;
+  while (i < src.length) {
+    if (" \t".includes(src[i])) { i++; continue; }
+    if (/\d/.test(src[i]) || (src[i] === "." && i + 1 < src.length && /\d/.test(src[i + 1]))) { let n = ""; while (i < src.length && /[\d.]/.test(src[i])) n += src[i++]; tokens.push({ type: "num", value: parseFloat(n) }); continue; }
+    if (src[i] === ">" && src[i + 1] === "=") { tokens.push({ type: "op", value: ">=" }); i += 2; continue; }
+    if (src[i] === "<" && src[i + 1] === "=") { tokens.push({ type: "op", value: "<=" }); i += 2; continue; }
+    if (src[i] === "!" && src[i + 1] === "=") { tokens.push({ type: "op", value: "!=" }); i += 2; continue; }
+    if (src[i] === "=" && src[i + 1] === "=") { tokens.push({ type: "op", value: "==" }); i += 2; continue; }
+    if (src[i] === ">" || src[i] === "<") { tokens.push({ type: "op", value: src[i] }); i++; continue; }
+    if (src[i] === "(") { tokens.push({ type: "lparen" }); i++; continue; }
+    if (src[i] === ")") { tokens.push({ type: "rparen" }); i++; continue; }
+    if ("+-*/".includes(src[i])) { tokens.push({ type: "arith", value: src[i] }); i++; continue; }
+    if (/[A-Z_]/.test(src[i])) { let id = ""; while (i < src.length && /[A-Z_0-9]/.test(src[i])) id += src[i++]; if (id === "AND") tokens.push({ type: "and" }); else if (id === "OR") tokens.push({ type: "or" }); else if (id === "NOT") tokens.push({ type: "not" }); else tokens.push({ type: "var", name: id }); continue; }
+    i++;
   }
-  if (condition === "rsi_strong") return latestRsi(rows) >= (threshold || 50);
-  if (condition === "volume_expand") return vol20[last] != null && (vols[last] / vol20[last] - 1) * 100 >= threshold;
-  return true;
+  return tokens;
 }
 
-function simFilteredList() {
-  if (!state.simFilterActive) return selectedSymbols();
-  const a = state.simFilterA, b = state.simFilterB, logic = state.simFilterLogic;
-  const av = state.simFilterAValue, bv = state.simFilterBValue;
-  const currentDate = state.dates[state.index];
-  return selectedSymbols().filter((s) => {
-    const ma = matchConditionDateAware(s, a, av, currentDate);
-    const mb = matchConditionDateAware(s, b, bv, currentDate);
-    if (logic === "and") return ma && mb;
-    return ma || mb;
+function parseFormula(tokens) {
+  let pos = 0;
+  const peek = () => tokens[pos], next = () => tokens[pos++];
+  function parseOr() { let l = parseAnd(); while (peek()?.type === "or") { next(); l = { type: "or", left: l, right: parseAnd() }; } return l; }
+  function parseAnd() { let l = parseNot(); while (peek()?.type === "and") { next(); l = { type: "and", left: l, right: parseNot() }; } return l; }
+  function parseNot() { if (peek()?.type === "not") { next(); return { type: "not", child: parseNot() }; } return parseCmp(); }
+  function parseCmp() { let l = parseAdd(); if (peek()?.type === "op") { const op = next().value, r = parseAdd(); return { type: "cmp", op, left: l, right: r }; } return l; }
+  function parseAdd() { let l = parseMul(); while (peek()?.type === "arith" && "+-".includes(peek().value)) { const op = next().value; l = { type: "arith", op, left: l, right: parseMul() }; } return l; }
+  function parseMul() { let l = parseUnary(); while (peek()?.type === "arith" && "*/".includes(peek().value)) { const op = next().value; l = { type: "arith", op, left: l, right: parseUnary() }; } return l; }
+  function parseUnary() { if (peek()?.type === "arith" && peek().value === "-") { next(); return { type: "neg", child: parsePrimary() }; } return parsePrimary(); }
+  function parsePrimary() { const t = peek(); if (!t) throw new Error("公式不完整"); if (t.type === "num") { next(); return { type: "num", value: t.value }; } if (t.type === "var") { next(); return { type: "var", name: t.name }; } if (t.type === "lparen") { next(); const e = parseOr(); if (peek()?.type === "rparen") next(); return e; } throw new Error(`意外的符号: ${t.type}`); }
+  return parseOr();
+}
+
+function evalAST(node, vars) {
+  if (!node) return 0;
+  switch (node.type) {
+    case "num": return node.value;
+    case "var": { const v = vars[node.name]; if (v === undefined || v === null) return 0; return v; }
+    case "neg": return -evalAST(node.child, vars);
+    case "not": return evalAST(node.child, vars) ? 0 : 1;
+    case "arith": { const l = evalAST(node.left, vars), r = evalAST(node.right, vars); if (node.op === "+") return l + r; if (node.op === "-") return l - r; if (node.op === "*") return l * r; if (node.op === "/") return r !== 0 ? l / r : Infinity; return 0; }
+    case "cmp": { const l = evalAST(node.left, vars), r = evalAST(node.right, vars); if (node.op === ">") return l > r ? 1 : 0; if (node.op === ">=") return l >= r ? 1 : 0; if (node.op === "<") return l < r ? 1 : 0; if (node.op === "<=") return l <= r ? 1 : 0; if (node.op === "==") return Math.abs(l - r) < 1e-9 ? 1 : 0; if (node.op === "!=") return Math.abs(l - r) >= 1e-9 ? 1 : 0; return 0; }
+    case "and": return (evalAST(node.left, vars) && evalAST(node.right, vars)) ? 1 : 0;
+    case "or": return (evalAST(node.left, vars) || evalAST(node.right, vars)) ? 1 : 0;
+    default: return 0;
+  }
+}
+
+function symbolMatchesFilter(symbolInfo, filterState, currentDate) {
+  if (!filterState || !filterState.active) return true;
+  if (filterState.formula) {
+    try {
+      const ind = computeIndicators(symbolInfo.rows, currentDate || undefined);
+      const tokens = tokenizeFormula(filterState.formula);
+      const ast = parseFormula(tokens);
+      return !!evalAST(ast, ind);
+    } catch { return true; }
+  }
+  if (!filterState.conditions || !filterState.conditions.length) return true;
+  const ind = computeIndicators(symbolInfo.rows, currentDate || undefined);
+  const results = filterState.conditions.map((c) => {
+    const val = ind[c.indicator] ?? 0;
+    switch (c.operator) {
+      case ">": return val > c.value;
+      case ">=": return val >= c.value;
+      case "<": return val < c.value;
+      case "<=": return val <= c.value;
+      case "=": return Math.abs(val - c.value) < 1e-9;
+      case "!=": return Math.abs(val - c.value) >= 1e-9;
+      default: return true;
+    }
   });
+  return filterState.logic === "and" ? results.every(Boolean) : results.some(Boolean);
 }
 
 function visibleSymbols() {
   const keyword = ($("symbolSearch")?.value || "").trim().toLowerCase();
-  const a = $("conditionA")?.value || "any", b = $("conditionB")?.value || "any", logic = $("conditionLogic")?.value || "and";
-  const av = Number($("conditionAValue")?.value || 0), bv = Number($("conditionBValue")?.value || 0);
   return state.symbols.filter((s) => {
     if (state.mode === "asset" && keyword && !`${s.symbol} ${s.name}`.toLowerCase().includes(keyword)) return false;
-    if (state.mode === "blind") {
-      const ma = matchCondition(s, a, av), mb = matchCondition(s, b, bv);
-      if (logic === "and" && !(ma && mb)) return false;
-      if (logic === "or" && !(ma || mb)) return false;
-    }
+    if (!symbolMatchesFilter(s, state.filter.setup)) return false;
     return true;
   });
+}
+
+function simFilteredList() {
+  if (!state.filter.sim.active) return selectedSymbols();
+  const currentDate = state.dates[state.index];
+  return selectedSymbols().filter((s) => symbolMatchesFilter(s, state.filter.sim, currentDate));
 }
 
 function applyBlindFilterSelection() {
   if (state.mode !== "blind") return;
   state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 500).map((s) => s.symbol));
+}
+
+function renderFilterBuilder(container, context) {
+  const groups = {};
+  for (const [key, info] of Object.entries(INDICATORS)) { if (!groups[info.group]) groups[info.group] = []; groups[info.group].push({ key, label: info.label }); }
+  let optionsHtml = "";
+  for (const [group, items] of Object.entries(groups)) { optionsHtml += `<optgroup label="${group}">`; for (const item of items) optionsHtml += `<option value="${item.key}">${item.label}</option>`; optionsHtml += "</optgroup>"; }
+  const fs = state.filter[context];
+  container.innerHTML = `
+    <div class="condition-builder" data-context="${context}">
+      <div class="condition-rows"></div>
+      <div class="condition-controls">
+        <button class="add-condition ghost" type="button">+ 添加条件</button>
+        <label class="filter-logic-label">逻辑
+          <select class="filter-logic"><option value="and">全部满足(AND)</option><option value="or">任一满足(OR)</option></select>
+        </label>
+      </div>
+      <div class="formula-section">
+        <button class="toggle-formula ghost" type="button">高级: 公式模式</button>
+        <div class="formula-editor hidden">
+          <textarea class="formula-input" placeholder="例: CLOSE > MA60 AND RSI14 > 50">${fs.formula || ""}</textarea>
+          <div class="formula-help">
+            <strong>变量:</strong> CLOSE, OPEN, HIGH, LOW, VOLUME, CHANGE_PCT, VOL_RATIO, MA5, MA10, MA20, MA60, MA120, MA250, CLOSE_MA5, CLOSE_MA20, CLOSE_MA60, MA5_MA20, MACD_DIF, MACD_DEA, MACD_HIST, RSI14, KDJ_K, KDJ_D, KDJ_J, WR14, BIAS6, BIAS12, BIAS24, BOLL_UP, BOLL_MID, BOLL_LOW, OBV, BR<br>
+            <strong>运算符:</strong> &gt;, &gt;=, &lt;, &lt;=, ==, !=, +, -, *, / &nbsp; <strong>逻辑:</strong> AND, OR, NOT &nbsp; <strong>括号:</strong> ()<br>
+            <strong>示例:</strong> CLOSE > MA60 AND RSI14 > 50 | (KDJ_J < 20 OR RSI14 < 30) AND CLOSE > MA5
+          </div>
+        </div>
+      </div>
+      <div class="filter-summary">${fs.active ? (fs.formula ? "公式: " + fs.formula : (fs.conditions.length ? fs.conditions.map((c) => `${INDICATORS[c.indicator]?.label || c.indicator} ${c.operator} ${c.value}`).join(fs.logic === "and" ? " AND " : " OR ") : "无条件")) : "未启用"}</div>
+      <div class="filter-actions">
+        <button class="apply-filter" type="button">应用筛选</button>
+        <button class="clear-filter ghost" type="button">清除</button>
+      </div>
+    </div>`;
+  const builder = container.querySelector(".condition-builder");
+  const rowsContainer = builder.querySelector(".condition-rows");
+  builder.querySelector(".filter-logic").value = fs.logic || "and";
+  let nextRowId = 0;
+  function addRow(indicator = "close", operator = ">", value = 0) {
+    const row = document.createElement("div"); row.className = "condition-row"; row.dataset.rowId = nextRowId++;
+    row.innerHTML = `<select class="cond-indicator">${optionsHtml}</select><select class="cond-operator"><option value=">">&gt;</option><option value=">=">&gt;=</option><option value="<">&lt;</option><option value="<=">&lt;=</option><option value="=">=</option><option value="!=">!=</option></select><input class="cond-value" type="number" step="any" value="${value}" /><button class="cond-remove ghost" type="button" title="删除条件">✕</button>`;
+    row.querySelector(".cond-indicator").value = indicator;
+    row.querySelector(".cond-operator").value = operator;
+    rowsContainer.appendChild(row);
+    row.querySelector(".cond-remove").addEventListener("click", () => { row.remove(); updateFS(); });
+    row.querySelectorAll(".cond-indicator, .cond-operator, .cond-value").forEach((el) => el.addEventListener("input", updateFS));
+  }
+  function readConditions() {
+    const conds = []; rowsContainer.querySelectorAll(".condition-row").forEach((row) => { conds.push({ indicator: row.querySelector(".cond-indicator").value, operator: row.querySelector(".cond-operator").value, value: Number(row.querySelector(".cond-value").value) || 0 }); }); return conds;
+  }
+  function updateFS() {
+    const isFormula = !builder.querySelector(".formula-editor").classList.contains("hidden");
+    fs.active = true;
+    if (isFormula) { fs.formula = builder.querySelector(".formula-input").value.trim(); fs.conditions = []; } else { fs.formula = ""; fs.logic = builder.querySelector(".filter-logic").value; fs.conditions = readConditions(); }
+    const summary = builder.querySelector(".filter-summary");
+    summary.textContent = fs.formula ? `公式: ${fs.formula}` : (fs.conditions.length ? fs.conditions.map((c) => `${INDICATORS[c.indicator]?.label || c.indicator} ${c.operator} ${c.value}`).join(fs.logic === "and" ? " AND " : " OR ") : "无条件");
+  }
+  if (fs.conditions && fs.conditions.length) { fs.conditions.forEach((c) => addRow(c.indicator, c.operator, c.value)); } else { addRow(); }
+  builder.querySelector(".add-condition").addEventListener("click", () => { addRow(); updateFS(); });
+  builder.querySelector(".filter-logic").addEventListener("change", updateFS);
+  builder.querySelector(".toggle-formula").addEventListener("click", () => { const ed = builder.querySelector(".formula-editor"); ed.classList.toggle("hidden"); builder.querySelector(".toggle-formula").textContent = ed.classList.contains("hidden") ? "高级: 公式模式" : "关闭公式模式"; });
+  builder.querySelector(".apply-filter").addEventListener("click", () => { updateFS(); if (context === "setup") { applyBlindFilterSelection(); renderSetup(); } else renderAll(); });
+  builder.querySelector(".clear-filter").addEventListener("click", () => { fs.active = false; fs.conditions = []; fs.formula = ""; fs.logic = "and"; rowsContainer.innerHTML = ""; addRow(); builder.querySelector(".filter-logic").value = "and"; builder.querySelector(".filter-summary").textContent = "未启用"; builder.querySelector(".formula-input").value = ""; if (context === "setup") { renderSetup(); } else renderAll(); });
 }
 
 async function loadSample() {
@@ -241,8 +401,6 @@ function renderSetup() {
       </label>
     </div>`).join("");
   $("symbolList").innerHTML ||= `<div class="notice">没有符合筛选条件的标的。</div>`;
-  document.querySelector(".asset-filter")?.classList.toggle("hidden-filter", state.mode !== "asset");
-  document.querySelector(".blind-filter")?.classList.toggle("hidden-filter", state.mode !== "blind");
   $("startSim").disabled = state.selected.size === 0;
   const selected = state.symbols.filter((s) => state.selected.has(s.symbol));
   const startMin = selected.map((s) => s.rows[0].date).sort().at(-1);
@@ -263,6 +421,7 @@ function startSimulation() {
   };
   state.cashCents = toCents(state.settings.initialCash); state.frozen = []; state.positions = new Map(); state.pending = []; state.trades = []; state.equity = []; state.todayTrades = []; state.finished = false;
   $("setup").classList.add("hidden"); $("result").classList.add("hidden"); $("simulator").classList.remove("hidden");
+  renderFilterBuilder(document.getElementById("simFilterContainer"), "sim");
   markEquity(); renderAll();
 }
 
@@ -515,31 +674,7 @@ function drawEquityCurve(equity = state.equity, drawdowns = reportStats(equity).
   ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${equity[0]?.date || ""} ${money(vals[0] || 0)}  -  ${equity.at(-1)?.date || ""} ${money(vals.at(-1) || 0)}`, pad, 18); ctx.fillText("净值曲线 / 回撤曲线", pad, h - 10);
 }
 
-function applySimFilter() {
-  state.simFilterActive = true;
-  state.simFilterA = $("simFilterA")?.value || "any";
-  state.simFilterAValue = Number($("simFilterAValue")?.value || 0);
-  state.simFilterLogic = $("simFilterLogic")?.value || "and";
-  state.simFilterB = $("simFilterB")?.value || "any";
-  state.simFilterBValue = Number($("simFilterBValue")?.value || 0);
-  const labels = { any: "不限", ma_bull: "MA5>MA20", above_ma60: "价>MA60", macd_positive: "MACD金叉", rsi_strong: "RSI>50", volume_expand: "量>VOL20", price_above_ma5: "价>MA5" };
-  const aLabel = state.simFilterA === "any" ? "不限" : `${labels[state.simFilterA] || state.simFilterA}(≥${state.simFilterAValue}%)`;
-  const bLabel = state.simFilterB === "any" ? "不限" : `${labels[state.simFilterB] || state.simFilterB}(≥${state.simFilterBValue}%)`;
-  const logicLabel = state.simFilterLogic === "and" ? "AND" : "OR";
-  $("simFilterSummary").textContent = `${aLabel} ${logicLabel} ${bLabel}`;
-  renderAll();
-}
-
-function clearSimFilter() {
-  state.simFilterActive = false;
-  $("simFilterA").value = "any";
-  $("simFilterAValue").value = "0";
-  $("simFilterLogic").value = "and";
-  $("simFilterB").value = "any";
-  $("simFilterBValue").value = "0";
-  $("simFilterSummary").textContent = "不限";
-  renderAll();
-}
+// Old applySimFilter/clearSimFilter replaced by renderFilterBuilder
 
 function showError(error) {
   const box = $("appError");
@@ -562,8 +697,6 @@ $("fileInput").addEventListener("change", async (e) => {
 });
 document.querySelectorAll("input[name=mode]").forEach((el) => el.addEventListener("change", () => { state.mode = el.value; document.querySelectorAll(".mode-card").forEach((c) => c.classList.toggle("selected", c.querySelector("input").checked)); renderSetup(); }));
 $("symbolSearch")?.addEventListener("input", renderSetup);
-[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("input", () => { applyBlindFilterSelection(); renderSetup(); }));
-[$("conditionA"), $("conditionB"), $("conditionAValue"), $("conditionBValue"), $("conditionLogic")].forEach((el) => el?.addEventListener("change", () => { applyBlindFilterSelection(); renderSetup(); }));
 $("symbolList").addEventListener("change", (e) => { const sym = e.target.dataset.symbol; if (!sym) return; e.target.checked ? state.selected.add(sym) : state.selected.delete(sym); if (state.selected.size > 500) { state.selected.delete(sym); e.target.checked = false; alert("最多选择500个标的"); } renderSetup(); });
 $("selectAll").addEventListener("click", () => { state.selected = new Set(visibleSymbols().filter((s) => s.valid).slice(0, 500).map((s) => s.symbol)); renderSetup(); });
 $("randomStart").addEventListener("click", () => { const min = new Date($("startDate").min), max = new Date($("startDate").max); if (!Number.isFinite(min.getTime()) || !Number.isFinite(max.getTime())) return; $("startDate").value = new Date(min.getTime() + Math.random() * (max - min)).toISOString().slice(0, 10); });
@@ -576,11 +709,10 @@ $("indicatorSelect").addEventListener("change", () => { syncIndicatorParams(true
 [$("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("change", updateOrderEstimate));
 document.querySelectorAll(".lot-quick").forEach((b) => b.addEventListener("click", () => { $("lotInput").value = b.dataset.lots; updateOrderEstimate(); }));
 $("halfCash").addEventListener("click", () => { const r = rowAt(state.active); if (r) { $("lotInput").value = Math.max(1, Math.floor(fromCents(state.cashCents) * 0.5 / r.close / 100)); updateOrderEstimate(); } });
-$("applySimFilter")?.addEventListener("click", applySimFilter);
-$("clearSimFilter")?.addEventListener("click", clearSimFilter);
 $("chart").addEventListener("mousemove", (e) => { const rows = rowsOf(state.active).filter((r) => r.date <= state.dates[state.index]).slice(-120); if (!rows.length) return; const rect = e.currentTarget.getBoundingClientRect(), i = Math.max(0, Math.min(rows.length - 1, Math.floor((e.clientX - rect.left - 46) / ((rect.width - 69) / rows.length)))); const r = rows[i]; $("crosshairInfo").textContent = `${r.date} 开:${r.open.toFixed(2)} 高:${r.high.toFixed(2)} 低:${r.low.toFixed(2)} 收:${r.close.toFixed(2)} 量:${Math.round(r.volume).toLocaleString()} 涨跌幅:${pct(r.close / r.pre_close - 1)}`; });
 window.addEventListener("resize", () => state.active && drawChart());
 syncIndicatorParams(false);
+renderFilterBuilder(document.getElementById("setupFilterContainer"), "setup");
 loadSample().catch(showError);
 }
 

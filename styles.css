@@ -228,6 +228,20 @@ body.dark #chart { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04)
 .filter-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
 .filter-summary { padding: 8px 12px; border: 1px solid var(--soft-line); border-radius: 12px; background: rgba(98, 133, 168, 0.08); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .filter-actions { display: grid; gap: 8px; margin-top: 4px; }
+.condition-builder { display: grid; gap: 10px; }
+.condition-rows { display: grid; gap: 8px; }
+.condition-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; }
+.condition-row select, .condition-row input { min-height: 36px; padding: 0 8px; margin: 0; font-size: 13px; }
+.cond-remove { min-width: 32px; min-height: 32px; padding: 0; font-size: 16px; cursor: pointer; }
+.condition-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filter-logic-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.filter-logic-label select { min-height: 32px; width: auto; padding: 0 8px; margin: 0; font-size: 13px; }
+.formula-section { margin-top: 4px; }
+.formula-editor { margin-top: 8px; }
+.formula-editor textarea { width: 100%; min-height: 60px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.54); color: var(--text); font: 12px/1.5 "SFMono-Regular", Consolas, monospace; resize: vertical; }
+body.dark .formula-editor textarea { background: rgba(0,0,0,0.18); }
+.formula-help { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--soft-line); border-radius: 10px; background: rgba(98,133,168,0.06); color: var(--muted); font-size: 11px; line-height: 1.6; }
+.filter-summary { padding: 6px 10px; border: 1px solid var(--soft-line); border-radius: 10px; background: rgba(98,133,168,0.08); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .quick-row button, .trade-actions button { flex: 1; }
 .quick-row { margin: 10px 0; }
 .trade-actions { margin-top: 10px; }
