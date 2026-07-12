@@ -12,14 +12,13 @@
       <header class="topbar">
         <div class="brand-block">
           <p class="eyebrow">KlineSimilarity</p>
-          <h1>K线模拟训练</h1>
-          <p class="subtitle">晨雾中的金融图书馆：用真实日线，在低噪声环境里练习技术判断、资金分配与风控纪律。</p>
+          <h1>K线模拟</h1>
         </div>
         <div class="top-actions">
           <button id="themeToggle" class="ghost" type="button">深色</button>
           <button id="loadSample" type="button">重载默认数据</button>
           <label class="file-button">
-            导入 CSV/JSON
+            导入数据
             <input id="fileInput" type="file" accept=".csv,.json,application/json,text/csv" />
           </label>
         </div>
@@ -30,8 +29,7 @@
           <div class="setup-hero">
             <div>
               <p class="eyebrow">New Simulation</p>
-              <h2>建立一次历史 K 线训练</h2>
-              <p>默认数据会自动载入。你也可以导入新的 CSV/JSON，进入模拟后，每一步只看当前历史日期以前的信息。</p>
+              <h2>新建模拟</h2>
             </div>
             <div class="hero-metrics" aria-label="默认交易参数">
               <span>默认资金 <strong>¥100,000</strong></span>
@@ -72,7 +70,7 @@
             <p class="eyebrow">Step 2</p>
             <h2>选择标的</h2>
           </div>
-          <div id="dataStatus" class="notice">尚未导入数据，请加载样例或导入 CSV/JSON。</div>
+          <div id="dataStatus" class="notice">加载样例数据中…</div>
           <div class="filter-panel">
             <div class="asset-filter">
               <label>代码/名称检索<input id="symbolSearch" type="search" placeholder="如 600519、贵州、银行" /></label>
