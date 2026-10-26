@@ -770,7 +770,7 @@ function indicator(rows, type) {
 
 function drawChart() {
   const canvas = $("chart"), ctx = canvas.getContext("2d"), rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(900, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.floor(rect.height * devicePixelRatio); ctx.scale(devicePixelRatio, devicePixelRatio);
+  canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio)); ctx.scale(devicePixelRatio, devicePixelRatio);
   const w = rect.width, h = rect.height, period = periodOf(), rows = chartRows(state.active);
   ctx.clearRect(0, 0, w, h); if (!rows.length) return;
   const n = Math.min(120, rows.length), view = rows.slice(-n), topH = h * 0.56, volH = h * 0.18, indH = h * 0.2, pad = 46, gap = 14;
@@ -941,8 +941,9 @@ function updateReportRange() {
 function drawEquityCurve(equity = state.equity, drawdowns = reportStats(equity).drawdowns) {
   const canvas = $("equityCurve"); if (!canvas) return;
   const ctx = canvas.getContext("2d"), rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(900, Math.floor(rect.width || 900)); canvas.height = Math.floor(rect.height || 260);
-  const w = canvas.width, h = canvas.height, vals = equity.map((e) => e.total);
+  const dpr = devicePixelRatio || 1, w = rect.width || 900, h = rect.height || 260;
+  canvas.width = Math.max(1, Math.floor(w * dpr)); canvas.height = Math.max(1, Math.floor(h * dpr)); ctx.scale(dpr, dpr);
+  const vals = equity.map((e) => e.total);
   const max = Math.max(...vals), min = Math.min(...vals), pad = 28;
   ctx.clearRect(0, 0, w, h); ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
   ctx.strokeStyle = css("--brand"); ctx.lineWidth = 2; ctx.beginPath();
