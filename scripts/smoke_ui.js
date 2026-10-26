@@ -49,7 +49,7 @@ class FakeElement {
 
 const ids = [
   "appError", "loadSample", "fileInput", "dataStatus", "symbolList", "startSim", "startDate", "initialCash",
-  "commissionRate", "stampTaxRate", "slippageRate", "capacityRate", "priceClose", "priceOpen", "periodSelect", "setup", "result", "simulator", "currentDate",
+  "commissionRate", "stampTaxRate", "slippageRate", "capacityRate", "minCommission", "priceClose", "priceOpen", "periodSelect", "setup", "result", "simulator", "currentDate",
   "totalAsset", "cashAvailable", "positionValue", "floatingPnl", "modeBadge", "activeTitle", "indicatorSelect", "chart",
   "crosshairInfo", "tabs", "positions", "todayPositions", "orders", "pendingOrders", "slList", "tradeHint", "orderEstimate", "lotInput", "buyBtn", "sellBtn", "cancelOrders",
   "nextDay", "finishSim", "themeToggle", "halfCash", "selectAll", "randomStart", "symbolSearch", "maPeriods", "indicatorParams",
@@ -62,6 +62,7 @@ Object.assign(elements.commissionRate, { value: "0.00025" });
 Object.assign(elements.stampTaxRate, { value: "0.0005" });
 Object.assign(elements.slippageRate, { value: "0.001" });
 Object.assign(elements.capacityRate, { value: "0.002" });
+Object.assign(elements.minCommission, { value: "0" });
 Object.assign(elements.lotInput, { value: "1" });
 Object.assign(elements.indicatorSelect, { value: "MACD" });
 Object.assign(elements.maPeriods, { value: "5,10,20,60,120,250" });

@@ -60,6 +60,12 @@
           <div class="setup-grid">
             <label>初始资金<input id="initialCash" type="number" min="1000" step="1000" value="100000" /></label>
             <label>佣金费率<input id="commissionRate" type="number" min="0" step="0.0001" value="0.00025" /></label>
+            <label>佣金最低收费
+              <select id="minCommission">
+                <option value="0">免五（无最低）</option>
+                <option value="5">不免五（最低5元）</option>
+              </select>
+            </label>
             <label>印花税<input id="stampTaxRate" type="number" min="0" step="0.0001" value="0.0005" /></label>
             <label>滑点<input id="slippageRate" type="number" min="0" step="0.0001" value="0.001" /></label>
             <label>成交概率系数<input id="capacityRate" type="number" min="0.0001" max="0.05" step="0.0001" value="0.002" /></label>

@@ -419,7 +419,8 @@ function startSimulation() {
   state.active = selected[0].symbol;
   state.settings = {
     commissionRate: Number($("commissionRate").value), stampTaxRate: Number($("stampTaxRate").value),
-    slippageRate: Number($("slippageRate").value), capacityRate: Number($("capacityRate").value), initialCash: Number($("initialCash").value)
+    slippageRate: Number($("slippageRate").value), capacityRate: Number($("capacityRate").value), initialCash: Number($("initialCash").value),
+    minCommission: Math.max(0, Number($("minCommission")?.value) || 0)
   };
   state.cashCents = toCents(state.settings.initialCash); state.pending = []; state.positions = new Map(); state.trades = []; state.roundTrips = []; state.stopOrders = new Map(); state.equity = []; state.todayTrades = []; state.finished = false;
   state.drawings = { tool: null, draft: null, bySymbol: state.drawings?.bySymbol || new Map() };
@@ -457,7 +458,7 @@ function markEquity() { state.equity.push({ date: state.dates[state.index], tota
 function estimateAt(symbol, side, lots, row) {
   if (!row) throw new Error("该标的今日停牌，不能交易");
   const shares = lots * 100, price = row.close, gross = toCents(price) * shares;
-  const commission = roundFee(gross * state.settings.commissionRate);
+  const commission = gross > 0 ? Math.max(roundFee(gross * state.settings.commissionRate), toCents(state.settings.minCommission || 0)) : 0;
   const stamp = side === "sell" ? roundFee(gross * state.settings.stampTaxRate) : 0;
   const slippage = roundFee(gross * state.settings.slippageRate);
   const cash = side === "buy" ? gross + commission + slippage : gross - commission - stamp - slippage;
@@ -880,7 +881,7 @@ function renderResult() {
   const rt = roundTripStats(state.roundTrips);
   $("result").classList.remove("hidden");
   $("simulator").classList.add("hidden");
-  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="setup-grid"><label>报告起始日<input id="reportStart" type="date" value="${state.equity[0]?.date || ""}" /></label><label>报告结束日<input id="reportEnd" type="date" value="${state.equity.at(-1)?.date || ""}" /></label><label>训练模式<input id="reportMode" type="text" value="${state.mode === "blind" ? "盲选模式" : "资产配置模式"}" disabled /></label></div><div id="reportMetrics" class="result-grid">
+  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="setup-grid"><label>报告起始日<input id="reportStart" type="date" value="${state.equity[0]?.date || ""}" /></label><label>报告结束日<input id="reportEnd" type="date" value="${state.equity.at(-1)?.date || ""}" /></label><label>训练模式<input id="reportMode" type="text" value="${state.mode === "blind" ? "盲选模式" : "资产配置模式"} / ${Number(state.settings.minCommission) > 0 ? `佣金最低${Number(state.settings.minCommission)}元` : "佣金免五"}" disabled /></label></div><div id="reportMetrics" class="result-grid">
     <div class="metric"><span>总收益率</span><strong class="${last >= first ? "up" : "down"}">${pct(last / first - 1)}</strong></div>
     <div class="metric"><span>年化收益率</span><strong class="${annual >= 0 ? "up" : "down"}">${pct(annual)}</strong></div>
     <div class="metric"><span>年化波动率</span><strong>${pct(vol)}</strong></div>

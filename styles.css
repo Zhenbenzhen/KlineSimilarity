@@ -164,7 +164,7 @@ label { color: var(--muted); font-size: 12px; font-weight: 500; }
 .section-title { margin: 20px 0 14px; }
 .section-title.compact { margin-top: 24px; }
 .mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.setup-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-top: 16px; }
+.setup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 16px; }
 .mode-card {
   display: grid;
   gap: 8px;
