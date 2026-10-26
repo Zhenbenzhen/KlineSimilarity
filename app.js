@@ -39,10 +39,12 @@ const INDICATORS = {
 
 const state = {
   raw: [], symbols: [], selected: new Set(), mode: "blind", aliases: new Map(), active: null,
-  index: 0, dates: [], settings: {}, cashCents: 0, frozen: [], positions: new Map(), pending: [], trades: [], equity: [], finished: false, todayTrades: [],
+  index: 0, dates: [], settings: {}, cashCents: 0, positions: new Map(), pending: [], trades: [], roundTrips: [], stopOrders: new Map(), equity: [], finished: false, todayTrades: [],
+  drawings: { tool: null, draft: null, bySymbol: new Map() },
+  chartView: null, simFilterActive: false,
   filter: {
     setup: { active: false, conditions: [], logic: "and", formula: "" },
-    sim:   { active: false, conditions: [], logic: "and", formula: "" },
+    sim:   { active: false, conditions: [], logic: "and", formula: "" }
   }
 };
 
@@ -350,8 +352,8 @@ function renderFilterBuilder(container, context) {
   builder.querySelector(".add-condition").addEventListener("click", () => { addRow(); updateFS(); });
   builder.querySelector(".filter-logic").addEventListener("change", updateFS);
   builder.querySelector(".toggle-formula").addEventListener("click", () => { const ed = builder.querySelector(".formula-editor"); ed.classList.toggle("hidden"); builder.querySelector(".toggle-formula").textContent = ed.classList.contains("hidden") ? "高级: 公式模式" : "关闭公式模式"; });
-  builder.querySelector(".apply-filter").addEventListener("click", () => { updateFS(); if (context === "setup") { applyBlindFilterSelection(); renderSetup(); } else renderAll(); });
-  builder.querySelector(".clear-filter").addEventListener("click", () => { fs.active = false; fs.conditions = []; fs.formula = ""; fs.logic = "and"; rowsContainer.innerHTML = ""; addRow(); builder.querySelector(".filter-logic").value = "and"; builder.querySelector(".filter-summary").textContent = "未启用"; builder.querySelector(".formula-input").value = ""; if (context === "setup") { renderSetup(); } else renderAll(); });
+  builder.querySelector(".apply-filter").addEventListener("click", () => { updateFS(); if (context === "setup") { applyBlindFilterSelection(); renderSetup(); } else { state.simFilterActive = fs.active; renderAll(); } });
+  builder.querySelector(".clear-filter").addEventListener("click", () => { fs.active = false; fs.conditions = []; fs.formula = ""; fs.logic = "and"; rowsContainer.innerHTML = ""; addRow(); builder.querySelector(".filter-logic").value = "and"; builder.querySelector(".filter-summary").textContent = "未启用"; builder.querySelector(".formula-input").value = ""; if (context === "setup") { applyBlindFilterSelection(); renderSetup(); } else { state.simFilterActive = false; renderAll(); } });
 }
 
 async function loadSample() {
@@ -360,7 +362,7 @@ async function loadSample() {
     return;
   }
   const res = await fetch("data/a_share_daily_10y.json", { cache: "no-store" });
-  if (!res.ok) throw new Error("未找到 data/a_share_daily_10y.json，请先运行 npm run fetch:sample");
+  if (!res.ok) throw new Error("未找到内置数据 data/a_share_daily_10y.json，请点击右上角「导入数据」上传 CSV/JSON 文件");
   await setData(await res.json());
 }
 
@@ -419,7 +421,9 @@ function startSimulation() {
     commissionRate: Number($("commissionRate").value), stampTaxRate: Number($("stampTaxRate").value),
     slippageRate: Number($("slippageRate").value), capacityRate: Number($("capacityRate").value), initialCash: Number($("initialCash").value)
   };
-  state.cashCents = toCents(state.settings.initialCash); state.frozen = []; state.positions = new Map(); state.pending = []; state.trades = []; state.equity = []; state.todayTrades = []; state.finished = false;
+  state.cashCents = toCents(state.settings.initialCash); state.pending = []; state.positions = new Map(); state.trades = []; state.roundTrips = []; state.stopOrders = new Map(); state.equity = []; state.todayTrades = []; state.finished = false;
+  state.drawings = { tool: null, draft: null, bySymbol: state.drawings?.bySymbol || new Map() };
+  state.chartView = null;
   $("setup").classList.add("hidden"); $("result").classList.add("hidden"); $("simulator").classList.remove("hidden");
   renderFilterBuilder(document.getElementById("simFilterContainer"), "sim");
   markEquity(); renderAll();
@@ -431,17 +435,27 @@ function rowAt(symbol, offset = 0) { const d = state.dates[state.index + offset]
 function lastPrice(symbol) { return rowAt(symbol)?.close ?? [...rowsOf(symbol)].reverse().find((r) => r.date <= state.dates[state.index])?.close ?? 0; }
 function label(symbol) { const s = state.symbols.find((x) => x.symbol === symbol); return state.mode === "blind" ? state.aliases.get(symbol) : `${s.name} ${symbol}`; }
 
+function posOf(symbol) {
+  let p = state.positions.get(symbol);
+  if (!p) { p = { lots: [] }; state.positions.set(symbol, p); }
+  return p;
+}
+function posShares(p) { return p.lots.reduce((a, l) => a + l.shares, 0); }
+function posCost(p) { return p.lots.reduce((a, l) => a + l.costCents, 0); }
+function posLocked(p) { return p.lots.reduce((a, l) => a + (l.index >= state.index ? l.shares : 0), 0); }
+function posSellable(p) { return p.lots.reduce((a, l) => a + (l.index < state.index ? l.shares : 0), 0); }
+function posExists(symbol) { const p = state.positions.get(symbol); return !!p && posShares(p) > 0; }
+
 function positionValueCents() {
   let total = 0;
-  for (const [sym, pos] of state.positions) total += toCents(lastPrice(sym)) * pos.shares;
+  for (const [sym, p] of state.positions) { if (posShares(p) > 0) total += toCents(lastPrice(sym)) * posShares(p); }
   return total;
 }
-function frozenCents() { return state.frozen.reduce((a, x) => a + x.amount, 0); }
-function totalAssetCents() { return state.cashCents + frozenCents() + positionValueCents(); }
+function totalAssetCents() { return state.cashCents + positionValueCents(); }
 function markEquity() { state.equity.push({ date: state.dates[state.index], total: totalAssetCents() }); }
 
-function estimate(symbol, side, lots) {
-  const row = rowAt(symbol); if (!row) throw new Error("该标的今日停牌，不能交易");
+function estimateAt(symbol, side, lots, row) {
+  if (!row) throw new Error("该标的今日停牌，不能交易");
   const shares = lots * 100, price = row.close, gross = toCents(price) * shares;
   const commission = roundFee(gross * state.settings.commissionRate);
   const stamp = side === "sell" ? roundFee(gross * state.settings.stampTaxRate) : 0;
@@ -449,6 +463,7 @@ function estimate(symbol, side, lots) {
   const cash = side === "buy" ? gross + commission + slippage : gross - commission - stamp - slippage;
   return { row, shares, price, gross, commission, stamp, slippage, cash };
 }
+function estimate(symbol, side, lots) { return estimateAt(symbol, side, lots, rowAt(symbol)); }
 
 function placeOrder(side) {
   let lots = Math.max(1, Math.floor(Number($("lotInput").value) || 1));
@@ -460,20 +475,49 @@ function placeOrder(side) {
       $("lotInput").value = lots;
     }
   }
+  const priceMode = $("priceOpen")?.checked ? "open" : "close";
   try {
-    const e = estimate(state.active, side, lots);
-    if (side === "buy" && e.cash > state.cashCents) throw new Error(`可用资金不足，还需 ${money(e.cash - state.cashCents)}`);
-    if (side === "sell" && (state.positions.get(state.active)?.shares || 0) < e.shares) throw new Error(`持仓不足，当前仅 ${Math.floor((state.positions.get(state.active)?.shares || 0) / 100)} 手`);
-    const done = executeOrder({ side, symbol: state.active, lots });
-    const msg = done ? `下单成功：已按当日收盘价${side === "buy" ? "买入" : "卖出"} ${lots} 手。` : "下单未成功：委托未成交或资金/持仓不足。";
-    $("tradeHint").textContent = msg;
-    toast(msg);
-  } catch (e) { $("tradeHint").textContent = e.message; toast(`下单未成功：${e.message}`); }
-  renderAll();
+    if (priceMode === "open") {
+      const nextRow = rowAt(state.active, 1) || rowAt(state.active);
+      const e = estimateAt(state.active, side, lots, nextRow);
+      if (side === "buy" && e.cash > state.cashCents) throw new Error(`可用资金不足，还需 ${money(e.cash - state.cashCents)}`);
+      if (side === "sell") {
+        const p = state.positions.get(state.active);
+        const locked = p ? posLocked(p) : 0, availNow = p ? posSellable(p) : 0;
+        const availNext = availNow + locked;
+        if (availNext < e.shares && locked > 0) throw new Error(`持仓不足，当前${Math.floor(availNext / 100)}手可卖（含次日解冻的${locked / 100}手）`);
+        if (availNext < e.shares) throw new Error(`持仓不足，当前仅 ${Math.floor(availNext / 100)} 手`);
+      }
+      state.pending.push({ side, symbol: state.active, lots, priceMode });
+      const msg = `已挂次日开盘价委托：${side === "buy" ? "买入" : "卖出"} ${lots} 手（约按 ${money(e.cash)} 成交），可撤销。`;
+      $("tradeHint").textContent = msg;
+      toast(msg);
+      renderAll();
+      return;
+    }
+    tryExecute({ side, symbol: state.active, lots, priceMode });
+    renderAll();
+  } catch (err) { $("tradeHint").textContent = err.message; toast(`下单未成功：${err.message}`); renderAll(); }
 }
 
-function executeOrder(order) {
+function tryExecute(order) {
   const e = estimate(order.symbol, order.side, order.lots);
+  if (order.side === "sell") {
+    const p = state.positions.get(order.symbol);
+    const locked = p ? posLocked(p) : 0, avail = p ? posSellable(p) : 0;
+    if (avail < e.shares && locked > 0) { $("tradeHint").textContent = `当日买入${locked / 100}手需次交易日才能卖出，当前可卖${Math.floor(avail / 100)}手`; return; }
+    if (avail < e.shares) { $("tradeHint").textContent = `持仓不足，当前可卖${Math.floor(avail / 100)}手`; return; }
+  }
+  const done = executeOrder(order);
+  const msg = done ? `下单成功：已按当日收盘价${order.side === "buy" ? "买入" : "卖出"} ${order.lots} 手。` : "下单未成功：委托未成交或资金/持仓不足。";
+  $("tradeHint").textContent = msg;
+  toast(msg);
+}
+
+function executeOrder(order, row) {
+  const refRow = row || rowAt(order.symbol);
+  const priceMode = order.priceMode || "close";
+  const e = estimateAt(order.symbol, order.side, order.lots, refRow);
   let lots = order.lots;
   const limitHit = Math.abs(e.row.close / e.row.pre_close - 1) >= 0.095;
   const capacity = Math.max(1, Math.floor((e.row.volume || 0) * state.settings.capacityRate));
@@ -481,36 +525,108 @@ function executeOrder(order) {
     const prob = Math.min(1, capacity / lots) * (limitHit ? 0.3 : 1);
     lots = Math.random() < prob ? lots : Math.max(1, capacity);
   }
-  const final = estimate(order.symbol, order.side, lots);
-  const pos = state.positions.get(order.symbol) || { shares: 0, costCents: 0 };
+  const final = estimateAt(order.symbol, order.side, lots, e.row);
+  const p = posOf(order.symbol);
   if (order.side === "buy") {
     if (final.cash > state.cashCents) return false;
     state.cashCents -= final.cash;
-    pos.costCents += final.cash; pos.shares += final.shares; state.positions.set(order.symbol, pos);
+    p.lots.push({ shares: final.shares, costCents: final.cash, date: state.dates[state.index], index: state.index, priceMode });
+    state.trades.push({ date: state.dates[state.index], symbol: order.symbol, side: "buy", lots, price: final.price, fees: final.commission + final.stamp + final.slippage, priceMode });
   } else {
-    if (pos.shares < final.shares) return false;
-    const avg = pos.shares ? pos.costCents / pos.shares : 0;
-    pos.shares -= final.shares; pos.costCents -= Math.round(avg * final.shares);
-    if (pos.shares <= 0) state.positions.delete(order.symbol); else state.positions.set(order.symbol, pos);
-    state.frozen.push({ amount: final.cash, release: state.index + 1 });
+    if (posSellable(p) < final.shares) return false;
+    let remaining = final.shares;
+    for (let i = 0; i < p.lots.length && remaining > 0;) {
+      const lot = p.lots[i];
+      if (lot.index >= state.index) { i++; continue; }
+      const take = Math.min(lot.shares, remaining);
+      const proceeds = Math.round(final.cash * take / final.shares);
+      const cost = Math.round(lot.costCents * take / lot.shares);
+      state.roundTrips.push({ buyDate: lot.date, sellDate: state.dates[state.index], symbol: order.symbol, shares: take, cost, proceeds, pnl: proceeds - cost, priceMode: lot.priceMode || "close" });
+      lot.shares -= take; lot.costCents -= cost; remaining -= take;
+      if (lot.shares <= 0) { p.lots.splice(i, 1); } else { i++; }
+    }
+    state.cashCents += final.cash;
+    if (posShares(p) <= 0) state.positions.delete(order.symbol);
+    state.trades.push({ date: state.dates[state.index], symbol: order.symbol, side: "sell", lots, price: final.price, fees: final.commission + final.stamp + final.slippage, priceMode });
   }
-  state.trades.push({ date: state.dates[state.index], symbol: order.symbol, side: order.side, lots, price: final.price, fees: final.commission + final.stamp + final.slippage });
-  state.todayTrades.push({ date: state.dates[state.index], symbol: order.symbol, side: order.side, lots, shares: final.shares, price: final.price, amount: final.cash });
+  state.todayTrades.push({ date: state.dates[state.index], symbol: order.symbol, side: order.side, lots, shares: final.shares, price: final.price, amount: final.cash, priceMode });
   return true;
 }
 
-function nextDay() {
+function processPending() {
+  if (!state.pending.length) return;
+  const pending = state.pending;
   state.pending = [];
+  for (const o of pending) {
+    const row = rowAt(o.symbol);
+    if (!row) { toast(`${label(o.symbol)} 今日停牌，委托已撤销`); continue; }
+    const done = executeOrder({ side: o.side, symbol: o.symbol, lots: o.lots, priceMode: o.priceMode || "open" }, row);
+    if (!done) toast(`${label(o.symbol)} 的${o.side === "buy" ? "买入" : "卖出"}委托未成交（资金/持仓不足或流动性太差）`);
+  }
+}
+
+function cancelPendingOrders() {
+  if (!state.pending.length) { toast("当前没有可撤销的委托"); return; }
+  const n = state.pending.length;
+  state.pending = [];
+  $("tradeHint").textContent = `已撤销 ${n} 笔未成交委托。`;
+  renderAll();
+}
+
+function setStopOrder() {
+  const stop = Math.max(0, Number($("slStop")?.value || 0) || 0);
+  const take = Math.max(0, Number($("slTake")?.value || 0) || 0);
+  const lots = Math.max(0, Math.floor(Number($("slLots")?.value || 0) || 0));
+  if (!stop && !take) { toast("请至少填写止损价或止盈价"); return; }
+  if (!posExists(state.active)) { toast("当前标的没有持仓，无法设置条件单"); return; }
+  state.stopOrders.set(state.active, { stop: stop || null, take: take || null, shares: lots ? lots * 100 : 0 });
+  renderAll();
+  toast(`已为 ${label(state.active)} 设置止盈止损`);
+}
+
+function cancelStopOrder(symbol) {
+  state.stopOrders.delete(symbol);
+  renderAll();
+}
+
+function processStopOrders() {
+  for (const [sym, so] of [...state.stopOrders]) {
+    const p = state.positions.get(sym);
+    if (!p || posShares(p) <= 0) { state.stopOrders.delete(sym); continue; }
+    const row = rowAt(sym);
+    if (!row) continue;
+    const hitStop = so.stop !== null && row.close <= so.stop;
+    const hitTake = so.take !== null && row.close >= so.take;
+    if (!hitStop && !hitTake) continue;
+    const avail = posSellable(p);
+    const shares = Math.min(so.shares || avail, avail);
+    if (shares < 100) continue;
+    state.stopOrders.delete(sym);
+    const done = executeOrder({ side: "sell", symbol: sym, lots: Math.floor(shares / 100) }, row);
+    toast(done
+      ? (hitStop ? `止损触发：${label(sym)} ${Math.floor(shares / 100)}手按当日收盘价卖出` : `止盈触发：${label(sym)} ${Math.floor(shares / 100)}手按当日收盘价卖出`)
+      : `止盈/止损触发但成交失败（流动性不足或持仓锁定）`);
+  }
+}
+
+function nextDay() {
   state.todayTrades = [];
   state.index += 1;
-  const released = state.frozen.filter((f) => f.release <= state.index).reduce((a, f) => a + f.amount, 0);
-  state.cashCents += released; state.frozen = state.frozen.filter((f) => f.release > state.index);
-  if (state.index >= state.dates.length - 1) return finishSimulation();
+  const reachedEnd = state.index >= state.dates.length - 1;
+  if (reachedEnd) {
+    state.pending = [];
+    processStopOrders();
+    return finishSimulation();
+  }
+  processPending();
+  processStopOrders();
   markEquity(); renderAll();
 }
 
 function finishSimulation() {
-  state.finished = true; markEquity(); renderAll(); renderResult();
+  state.finished = true;
+  if (state.pending.length) { state.pending = []; toast("模拟结束，未成交委托已撤销"); }
+  markEquity(); renderAll(); renderResult();
 }
 
 function updateOrderEstimate() {
@@ -524,8 +640,111 @@ function updateOrderEstimate() {
     lots = Math.max(1, Math.floor(amount / (row.close * 100 * (1 + state.settings.slippageRate + state.settings.commissionRate))));
     $("lotInput").value = lots;
   }
-  const buy = estimate(state.active, "buy", lots), sell = estimate(state.active, "sell", lots);
-  box.innerHTML = `手数 ${lots} / 股数 ${lots * 100}<br>买入需 ${money(buy.cash)}（含佣金和滑点）<br>卖出预计到账 ${money(sell.cash)}（T+1可用）`;
+  const priceMode = $("priceOpen")?.checked ? "open" : "close";
+  const refRow = priceMode === "open" ? (rowAt(state.active, 1) || row) : row;
+  const buy = estimateAt(state.active, "buy", lots, refRow), sell = estimateAt(state.active, "sell", lots, refRow);
+  const priceNote = priceMode === "open" ? "（次日开盘价估算）" : "（当日收盘价）";
+  const p = state.positions.get(state.active);
+  const locked = p ? posLocked(p) : 0, availNow = p ? posSellable(p) : 0;
+  const availRef = priceMode === "open" ? availNow + locked : availNow;
+  const lockNote = availRef < lots * 100 && locked > 0 ? `<br><span class="down">当日买入${locked / 100}手需次交易日才能卖出，当前可卖${Math.floor(availRef / 100)}手</span>` : "";
+  box.innerHTML = `手数 ${lots} / 股数 ${lots * 100}${priceNote}<br>买入需 ${money(buy.cash)}（含佣金和滑点）<br>卖出预计到账 ${money(sell.cash)}（当日可用可再买入）${lockNote}`;
+}
+
+const PERIOD_LABEL = { day: "日线", week: "周线", month: "月线" };
+
+function periodOf() { return $("periodSelect")?.value || "day"; }
+
+function weekKey(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+function monthKey(dateStr) { return dateStr.slice(0, 7); }
+
+function aggregateRows(rows, period) {
+  const groups = [];
+  let cur = null;
+  for (const r of rows) {
+    const key = period === "week" ? weekKey(r.date) : monthKey(r.date);
+    if (!cur || cur.key !== key) { cur = { key, rows: [] }; groups.push(cur); }
+    cur.rows.push(r);
+  }
+  const bars = groups.map((g) => {
+    const rs = g.rows;
+    return {
+      symbol: rs[0].symbol, name: rs[0].name, date: rs[rs.length - 1].date, days: rs.length,
+      open: rs[0].open, high: Math.max(...rs.map((r) => r.high)), low: Math.min(...rs.map((r) => r.low)),
+      close: rs[rs.length - 1].close, volume: rs.reduce((a, r) => a + r.volume, 0), pre_close: rs[0].pre_close
+    };
+  });
+  return bars.map((b, i, arr) => { b.pre_close = i ? arr[i - 1].close : rows[0].pre_close; return b; });
+}
+
+function chartRows(symbol) {
+  const rows = rowsOf(symbol).filter((r) => r.date <= state.dates[state.index]);
+  const period = periodOf();
+  return period === "day" ? rows : aggregateRows(rows, period);
+}
+
+function chartHit(e) {
+  const cv = state.chartView;
+  if (!cv || !cv.view.length) return null;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  if (py < 12 || py > cv.topH) return null;
+  const i = Math.max(0, Math.min(cv.view.length - 1, Math.floor((px - 46) / ((rect.width - 69) / cv.view.length))));
+  const p = cv.max - (py - 12) * (cv.max - cv.min) / (cv.topH - 24);
+  return { i, date: cv.view[i].date, p };
+}
+
+function pushDrawing(item) {
+  const list = state.drawings.bySymbol.get(state.active) || [];
+  list.push(item);
+  state.drawings.bySymbol.set(state.active, list);
+  drawChart();
+}
+
+function drawItems() { return state.drawings.bySymbol.get(state.active) || []; }
+
+function pointIndexByDate(view, date) {
+  let lo = 0, hi = view.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; view[mid].date < date ? lo = mid + 1 : hi = mid; }
+  if (lo >= view.length) return view[date > view[view.length - 1].date ? -1 : 0];
+  return lo < 0 ? -1 : lo;
+}
+
+function renderDrawings(ctx, view, x, y, w) {
+  const brand = css("--brand"), muted = css("--muted");
+  const items = drawItems();
+  ctx.lineWidth = 1.2;
+  for (const d of items) {
+    ctx.strokeStyle = brand;
+    if (d.type === "hline") {
+      const yy = y(d.p);
+      ctx.beginPath(); ctx.moveTo(46, yy); ctx.lineTo(w - 10, yy); ctx.stroke();
+      ctx.fillStyle = muted; ctx.font = "11px Consolas"; ctx.fillText(d.p.toFixed(2), w - 46, yy - 4);
+      continue;
+    }
+    const i1 = pointIndexByDate(view, d.d1), i2 = pointIndexByDate(view, d.d2);
+    if (i1 < 0 || i2 < 0) continue;
+    const x1 = x(i1) + 3, x2 = x(i2) + 3, y1 = y(d.p1), y2 = y(d.p2);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.fillStyle = brand;
+    ctx.fillRect(x1 - 2, y1 - 2, 4, 4); ctx.fillRect(x2 - 2, y2 - 2, 4, 4);
+  }
+  const draft = state.drawings.draft;
+  if (draft && state.chartView) {
+    const i1 = pointIndexByDate(view, draft.d1);
+    if (i1 >= 0) {
+      ctx.strokeStyle = muted;
+      if (draft.type === "trend") {
+        const i2 = pointIndexByDate(view, draft.d2);
+        if (i2 >= 0) { ctx.beginPath(); ctx.moveTo(x(i1) + 3, y(draft.p1)); ctx.lineTo(x(i2) + 3, y(draft.p2)); ctx.stroke(); }
+      }
+    }
+  }
 }
 
 function calcSeries(rows) {
@@ -551,22 +770,41 @@ function indicator(rows, type) {
 function drawChart() {
   const canvas = $("chart"), ctx = canvas.getContext("2d"), rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(900, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.floor(rect.height * devicePixelRatio); ctx.scale(devicePixelRatio, devicePixelRatio);
-  const w = rect.width, h = rect.height, rows = rowsOf(state.active).filter((r) => r.date <= state.dates[state.index]);
+  const w = rect.width, h = rect.height, period = periodOf(), rows = chartRows(state.active);
   ctx.clearRect(0, 0, w, h); if (!rows.length) return;
   const n = Math.min(120, rows.length), view = rows.slice(-n), topH = h * 0.56, volH = h * 0.18, indH = h * 0.2, pad = 46, gap = 14;
   const max = Math.max(...view.map((r) => r.high)), min = Math.min(...view.map((r) => r.low));
   const x = (i) => pad + i * ((w - pad * 1.5) / n) + 3, bw = Math.max(3, (w - pad * 1.5) / n * 0.62), y = (p) => 12 + (max - p) / (max - min || 1) * (topH - 24);
-  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1; for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.moveTo(pad, 12 + i * topH / 5); ctx.lineTo(w - 10, 12 + i * topH / 5); ctx.stroke(); }
+  state.chartView = { view, max, min, topH, rectWidth: w, rectHeight: h, period };
   view.forEach((r, i) => { const up = r.close >= r.open; ctx.strokeStyle = ctx.fillStyle = up ? css("--up") : css("--down"); const cx = x(i) + bw / 2; ctx.beginPath(); ctx.moveTo(cx, y(r.high)); ctx.lineTo(cx, y(r.low)); ctx.stroke(); ctx.globalAlpha = 0.88; ctx.fillRect(x(i), Math.min(y(r.open), y(r.close)), bw, Math.max(1, Math.abs(y(r.open) - y(r.close)))); ctx.globalAlpha = 1; });
-  const series = calcSeries(rows); Object.entries(series.ma).forEach(([n, vals], i) => drawLine(ctx, vals.slice(-view.length), x, y, MA_COLORS[n] || EXTRA_MA_COLORS[i % EXTRA_MA_COLORS.length]));
+  const series = calcSeries(rows); Object.entries(series.ma).forEach(([n2, vals], i) => drawLine(ctx, vals.slice(-view.length), x, y, MA_COLORS[n2] || EXTRA_MA_COLORS[i % EXTRA_MA_COLORS.length]));
   const type = $("indicatorSelect").value, ind = indicator(rows, type); if (ind.overlay) ind.overlay.forEach((l, i) => drawLine(ctx, l.values.slice(-view.length), x, y, ["#b192d4", "#d85a5a", "#4d9e7a"][i]));
   const baseY = topH + gap, vmax = Math.max(...view.map((r) => r.volume));
   view.forEach((r, i) => { ctx.fillStyle = r.close >= r.open ? css("--up") : css("--down"); ctx.globalAlpha = 0.55; ctx.fillRect(x(i), baseY + volH - r.volume / Math.max(1, vmax) * volH, bw, r.volume / Math.max(1, vmax) * volH); ctx.globalAlpha = 1; });
   const indY = baseY + volH + gap;
   if (ind.bars) drawBars(ctx, ind.bars.slice(-view.length), x, indY, indH, bw);
   ind.lines?.forEach((l, i) => drawIndicatorLine(ctx, l.values.slice(-view.length), x, indY, indH, ["#6c9bcf", "#ff9a62", "#b192d4"][i]));
-  ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${view[0].date} - ${view.at(-1).date}`, pad, h - 8); ctx.fillText(max.toFixed(2), w - 42, 20); ctx.fillText(min.toFixed(2), w - 42, topH - 4);
+  ctx.fillStyle = css("--muted"); ctx.font = "12px Consolas"; ctx.fillText(`${PERIOD_LABEL[period] || "日线"} ${view[0].date} - ${view.at(-1).date}（${period === "day" ? "逐日" : "每根含" + view.at(-1).days + "个交易日"}）`, pad, h - 8);
   ctx.fillText("VOL", pad, baseY + 12); ctx.fillText(type, pad, indY + 12);
+  let hiI = 0, loI = 0;
+  view.forEach((r, i) => { if (r.high > view[hiI].high) hiI = i; if (r.low < view[loI].low) loI = i; });
+  drawRangeMark(ctx, "最高", view[hiI].high, view[hiI].date, css("--up"), x, y, w);
+  drawRangeMark(ctx, "最低", view[loI].low, view[loI].date, css("--down"), x, y, w);
+  renderDrawings(ctx, view, x, y, w);
+}
+
+function drawRangeMark(ctx, tag, value, dateStr, color, x, y, w) {
+  const yy = y(value);
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(46, yy); ctx.lineTo(w - 10, yy); ctx.stroke();
+  const text = `${tag} ${value.toFixed(2)} ${dateStr}`;
+  ctx.font = "10px Consolas";
+  const tw = Math.ceil(text.length * 6.2) + 14;
+  const cx = Math.max(46, w - 16 - tw);
+  ctx.fillStyle = color;
+  ctx.fillRect(cx, yy - 9, tw, 18);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, cx + 7, yy + 4);
 }
 
 function drawLine(ctx, values, x, y, color) { ctx.strokeStyle = color; ctx.beginPath(); values.forEach((v, i) => { if (v == null) return; const xx = x(i) + 3, yy = y(v); i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }); ctx.stroke(); }
@@ -575,17 +813,54 @@ function drawBars(ctx, values, x, baseY, volH, bw) { const m = Math.max(1e-9, ..
 
 function renderAll() {
   const row = rowAt(state.active), total = totalAssetCents(), pnl = total - toCents(state.settings.initialCash || 0);
-  $("currentDate").textContent = state.dates[state.index] || "-"; $("totalAsset").textContent = money(total); $("cashAvailable").textContent = money(state.cashCents); $("frozenCash").textContent = money(frozenCents());
+  $("currentDate").textContent = state.dates[state.index] || "-"; $("totalAsset").textContent = money(total); $("cashAvailable").textContent = money(state.cashCents); $("positionValue").textContent = money(positionValueCents());
   $("floatingPnl").textContent = `${pnl >= 0 ? "+" : ""}${money(pnl)}`; $("floatingPnl").className = pnl >= 0 ? "up" : "down";
   $("modeBadge").textContent = state.mode === "blind" ? "盲选模式" : "资产配置模式"; $("activeTitle").textContent = label(state.active);
   $("tabs").innerHTML = simFilteredList().map((s) => `<button class="tab ${s.symbol === state.active ? "active" : ""}" data-tab="${s.symbol}">${label(s.symbol)}</button>`).join("");
   if (state.simFilterActive && !simFilteredList().find((s) => s.symbol === state.active) && simFilteredList().length) { state.active = simFilteredList()[0].symbol; }
-  $("positions").innerHTML = [...state.positions].map(([sym, p]) => { const val = toCents(lastPrice(sym)) * p.shares, pnl = val - p.costCents; return `<div class="position-card"><strong>${label(sym)}</strong><span>${p.shares / 100}手 / 市值 ${money(val)}</span><br><span class="${pnl >= 0 ? "up" : "down"}">盈亏 ${money(pnl)} ${pct(pnl / Math.max(1, p.costCents))}</span></div>`; }).join("") || "暂无持仓";
-  $("todayPositions").innerHTML = state.todayTrades.filter((t) => t.side === "buy").map((t) => `<div class="position-card"><strong>${label(t.symbol)}</strong><span>今日买入 ${t.lots}手 @ ${t.price.toFixed(2)}</span><br><span>成交额 ${money(t.amount)}</span></div>`).join("") || "暂无当日成交持仓";
+  $("positions").innerHTML = [...state.positions].map(([sym, p]) => { const shares = posShares(p), val = toCents(lastPrice(sym)) * shares, pnlPos = val - posCost(p); const locked = posLocked(p); return `<div class="position-card"><strong>${label(sym)}</strong><span>${shares / 100}手 / 均价 ${(posCost(p) / Math.max(1, shares)).toFixed(2)} / 市值 ${money(val)}${locked ? `（当日买入${locked / 100}手锁定）` : ""}</span><br><span class="${pnlPos >= 0 ? "up" : "down"}">盈亏 ${money(pnlPos)} ${pct(pnlPos / Math.max(1, posCost(p)))}</span></div>`; }).join("") || "暂无持仓";
+  $("todayPositions").innerHTML = state.todayTrades.filter((t) => t.side === "buy").map((t) => `<div class="position-card"><strong>${label(t.symbol)}</strong><span>今日买入 ${t.lots}手 @ ${t.price.toFixed(2)}</span><br><span>成交额 ${money(t.amount)}（${t.priceMode === "open" ? "次日开盘价" : "当日收盘价"}成交）</span></div>`).join("") || "暂无当日成交持仓";
   $("orders").innerHTML = state.trades.slice(-20).reverse().map((t) => `<div class="order-card"><strong>${t.date} ${label(t.symbol)}</strong>${t.side === "buy" ? "买入" : "卖出"} ${t.lots}手 @ ${t.price.toFixed(2)} / 费用 ${money(t.fees)}</div>`).join("") || "暂无交易";
-  $("tradeHint").textContent = row ? `现价 ${row.close.toFixed(2)}，涨跌幅 ${pct(row.close / row.pre_close - 1)}，当日委托按收盘价成交。` : "该标的今日停牌，不能交易。";
+  $("pendingOrders").innerHTML = state.pending.length
+    ? state.pending.map((o, i) => `<div class="order-card pending-item"><span>${o.side === "buy" ? "买入" : "卖出"} ${label(o.symbol)} ${o.lots}手（次日开盘价成交）</span></div>`).join("")
+    : "暂无挂单";
+  $("pendingOrders").classList.toggle("empty", !state.pending.length);
+  $("slList").innerHTML = state.stopOrders.size
+    ? [...state.stopOrders].map(([sym, so]) => `<div class="sl-item"><strong>${label(sym)}</strong><span class="sl-meta">${so.stop !== null ? `止损 ≤ ${so.stop.toFixed(2)}` : ""}${so.stop !== null && so.take !== null ? " / " : ""}${so.take !== null ? `止盈 ≥ ${so.take.toFixed(2)}` : ""} · ${so.shares ? `${so.shares / 100}手` : "全部可卖"}</span><button class="ghost sl-cancel-pos" type="button" data-symbol="${sym}">取消</button></div>`).join("")
+    : "暂无条件单";
+  $("tradeHint").textContent = row ? `委托按${$("priceOpen")?.checked ? "次日开盘价" : "当日收盘价"}成交，现价 ${row.close.toFixed(2)}，涨跌幅 ${pct(row.close / row.pre_close - 1)}。` : "该标的今日停牌，不能交易。";
   updateOrderEstimate();
   drawChart();
+}
+
+function roundTripStats(rts) {
+  const sorted = [...rts].sort((a, b) => a.sellDate.localeCompare(b.sellDate));
+  const wins = sorted.filter((r) => r.pnl > 0), losses = sorted.filter((r) => r.pnl < 0);
+  const winRate = sorted.length ? wins.length / sorted.length : 0;
+  const avgWin = wins.length ? wins.reduce((a, r) => a + r.pnl, 0) / wins.length : 0;
+  const avgLoss = losses.length ? losses.reduce((a, r) => a + r.pnl, 0) / losses.length : 0;
+  const plRatio = avgLoss ? Math.abs(avgWin / avgLoss) : (avgWin ? Infinity : 0);
+  let maxConsLoss = 0, cur = 0;
+  for (const r of sorted) { if (r.pnl < 0) { cur += 1; maxConsLoss = Math.max(maxConsLoss, cur); } else cur = 0; }
+  return { total: sorted.length, wins: wins.length, losses: losses.length, winRate, avgWin, avgLoss, plRatio, maxConsLoss };
+}
+
+function tradeStatsHtml(s, extra) {
+  const plText = Number.isFinite(s.plRatio) ? s.plRatio.toFixed(2) : "∞";
+  return `
+    <div class="metric"><span>完整交易</span><strong>${s.total}</strong></div>
+    <div class="metric"><span>胜率</span><strong class="${s.winRate >= 0.5 ? "up" : "down"}">${pct(s.winRate)}</strong></div>
+    <div class="metric"><span>盈利/亏损笔数</span><strong><span class="up">${s.wins}</span> / <span class="down">${s.losses}</span></strong></div>
+    <div class="metric"><span>盈亏比</span><strong>${plText}</strong></div>
+    <div class="metric"><span>平均每笔盈利</span><strong class="up">${money(s.avgWin)}</strong></div>
+    <div class="metric"><span>平均每笔亏损</span><strong class="down">${money(s.avgLoss)}</strong></div>
+    <div class="metric"><span>最大连续亏损</span><strong class="down">${s.maxConsLoss} 次</strong></div>${extra || ""}`;
+}
+
+function roundTripsHtml(rts) {
+  if (!rts.length) return `<div class="notice small">暂无已完成交易，先买入并在之后的交易日卖出才会产生完整交易记录。</div>`;
+  const list = [...rts].sort((a, b) => b.sellDate.localeCompare(a.sellDate)).slice(0, 30);
+  return list.map((r) => `<div class="order-card"><strong>${r.buyDate} → ${r.sellDate} ${label(r.symbol)}</strong>${r.shares / 100}股 / 成本 ${money(r.cost)} / 回款 ${money(r.proceeds)} / <span class="${r.pnl >= 0 ? "up" : "down"}">盈亏 ${money(r.pnl)}</span> <span class="meta-note">${r.priceMode === "open" ? "次日开盘价买入" : "当日收盘价买入"}</span></div>`).join("");
 }
 
 function renderResult() {
@@ -602,9 +877,10 @@ function renderResult() {
   const sortino = downsideVol ? annual / downsideVol : 0;
   const calmar = maxDd ? annual / Math.abs(maxDd) : 0;
   const best = Math.max(0, ...returns), worst = Math.min(0, ...returns);
+  const rt = roundTripStats(state.roundTrips);
   $("result").classList.remove("hidden");
   $("simulator").classList.add("hidden");
-  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="setup-grid"><label>报告起始日<input id="reportStart" type="date" value="${state.equity[0]?.date || ""}" /></label><label>报告结束日<input id="reportEnd" type="date" value="${state.equity.at(-1)?.date || ""}" /></label></div><div id="reportMetrics" class="result-grid">
+  $("result").innerHTML = `<div class="section-title"><p class="eyebrow">Result</p><h2>模拟结果</h2></div><div class="setup-grid"><label>报告起始日<input id="reportStart" type="date" value="${state.equity[0]?.date || ""}" /></label><label>报告结束日<input id="reportEnd" type="date" value="${state.equity.at(-1)?.date || ""}" /></label><label>训练模式<input id="reportMode" type="text" value="${state.mode === "blind" ? "盲选模式" : "资产配置模式"}" disabled /></label></div><div id="reportMetrics" class="result-grid">
     <div class="metric"><span>总收益率</span><strong class="${last >= first ? "up" : "down"}">${pct(last / first - 1)}</strong></div>
     <div class="metric"><span>年化收益率</span><strong class="${annual >= 0 ? "up" : "down"}">${pct(annual)}</strong></div>
     <div class="metric"><span>年化波动率</span><strong>${pct(vol)}</strong></div>
@@ -615,10 +891,10 @@ function renderResult() {
     <div class="metric"><span>最大回撤</span><strong class="down">${pct(maxDd)}</strong></div>
     <div class="metric"><span>最佳单日</span><strong class="up">${pct(best)}</strong></div>
     <div class="metric"><span>最差单日</span><strong class="down">${pct(worst)}</strong></div>
-    <div class="metric"><span>交易笔数</span><strong>${state.trades.length}</strong></div>
     <div class="metric"><span>累计费用</span><strong>${money(state.trades.reduce((a, t) => a + t.fees, 0))}</strong></div>
     <div class="metric"><span>最终资产</span><strong>${money(last)}</strong></div>
-  </div><canvas id="equityCurve" class="equity-curve" width="1200" height="260"></canvas><div class="report-actions"><button id="backHome" type="button">返回首页</button></div>`;
+    ${tradeStatsHtml(rt, "")}
+  </div><h3 class="section-title compact">交易复盘（按卖出日倒序，最多展示30条）</h3><div id="roundTrips" class="orders">${roundTripsHtml(state.roundTrips)}</div><canvas id="equityCurve" class="equity-curve" width="1200" height="260"></canvas><div class="report-actions"><button id="backHome" type="button">返回首页</button></div>`;
   updateReportRange();
   $("reportStart").addEventListener("change", updateReportRange);
   $("reportEnd").addEventListener("change", updateReportRange);
@@ -642,6 +918,7 @@ function updateReportRange() {
   const start = $("reportStart")?.value || "0000-00-00", end = $("reportEnd")?.value || "9999-99-99";
   const range = state.equity.filter((e) => e.date >= start && e.date <= end);
   const s = reportStats(range.length >= 2 ? range : state.equity);
+  const rt = roundTripStats(state.roundTrips.filter((r) => r.sellDate >= start && r.sellDate <= end));
   $("reportMetrics").innerHTML = `
     <div class="metric"><span>区间收益率</span><strong class="${s.last >= s.first ? "up" : "down"}">${pct(s.last / s.first - 1)}</strong></div>
     <div class="metric"><span>年化收益率</span><strong class="${s.annual >= 0 ? "up" : "down"}">${pct(s.annual)}</strong></div>
@@ -653,8 +930,10 @@ function updateReportRange() {
     <div class="metric"><span>最大回撤</span><strong class="down">${pct(s.maxDd)}</strong></div>
     <div class="metric"><span>最佳单日</span><strong class="up">${pct(s.best)}</strong></div>
     <div class="metric"><span>最差单日</span><strong class="down">${pct(s.worst)}</strong></div>
-    <div class="metric"><span>交易笔数</span><strong>${state.trades.length}</strong></div>
-    <div class="metric"><span>累计费用</span><strong>${money(state.trades.reduce((a, t) => a + t.fees, 0))}</strong></div>`;
+    ${tradeStatsHtml(rt, `<div class="metric"><span>区间累计费用</span><strong>${money(state.trades.filter((t) => t.date >= start && t.date <= end).reduce((a, t) => a + t.fees, 0))}</strong></div>`)}
+  `;
+  const roundTripsEl = $("roundTrips");
+  if (roundTripsEl) roundTripsEl.innerHTML = roundTripsHtml(state.roundTrips.filter((r) => r.sellDate >= start && r.sellDate <= end));
   drawEquityCurve(range.length >= 2 ? range : state.equity, s.drawdowns);
 }
 
@@ -703,13 +982,48 @@ $("randomStart").addEventListener("click", () => { const min = new Date($("start
 $("startSim").addEventListener("click", startSimulation);
 $("tabs").addEventListener("click", (e) => { if (e.target.dataset.tab) { state.active = e.target.dataset.tab; renderAll(); } });
 $("buyBtn").addEventListener("click", () => placeOrder("buy")); $("sellBtn").addEventListener("click", () => placeOrder("sell"));
-$("cancelOrders").addEventListener("click", () => { $("tradeHint").textContent = "提示已清空。"; }); $("nextDay").addEventListener("click", nextDay); $("finishSim").addEventListener("click", () => finishSimulation());
+$("cancelOrders").addEventListener("click", cancelPendingOrders); $("nextDay").addEventListener("click", nextDay); $("finishSim").addEventListener("click", () => finishSimulation());
+$("periodSelect")?.addEventListener("change", () => { state.chartView = null; drawChart(); });
+$("slSet")?.addEventListener("click", setStopOrder);
+$("slCancel")?.addEventListener("click", () => { if (state.stopOrders.has(state.active)) { cancelStopOrder(state.active); toast("已取消当前标的条件单"); } else toast("当前标的没有条件单"); });
+$("slList")?.addEventListener("click", (e) => { const sym = e.target?.dataset?.symbol; if (sym) cancelStopOrder(sym); });
+document.querySelectorAll(".draw-tool").forEach((b) => b.addEventListener("click", () => {
+  const tool = state.drawings.tool === b.dataset.tool ? null : b.dataset.tool;
+  state.drawings.tool = tool; state.drawings.draft = null;
+  document.querySelectorAll(".draw-tool").forEach((x) => x.classList.toggle("active", x.dataset.tool === tool));
+  toast(tool ? (tool === "trend" ? "趋势线：点击主图选取起点，再选终点" : "水平线：点击主图任意价位即可画线") : "已退出画线模式");
+}));
+document.querySelector(".draw-undo")?.addEventListener("click", () => { const list = drawItems(); if (!list.length) return toast("当前标的没有画线"); list.pop(); drawChart(); });
+document.querySelector(".draw-clear")?.addEventListener("click", () => { state.drawings.bySymbol.delete(state.active); state.drawings.draft = null; drawChart(); toast("已清除当前标的画线"); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.drawings.tool) { state.drawings.tool = null; state.drawings.draft = null; document.querySelectorAll(".draw-tool").forEach((x) => x.classList.remove("active")); drawChart(); } });
+const chartEl = $("chart");
+chartEl?.addEventListener("pointerdown", (e) => {
+  if (!state.drawings.tool || !state.active) return;
+  const hit = chartHit(e); if (!hit) return;
+  e.preventDefault();
+  if (state.drawings.tool === "hline") { pushDrawing({ type: "hline", p: hit.p }); return; }
+  if (!state.drawings.draft) { state.drawings.draft = { type: "trend", d1: hit.date, p1: hit.p, d2: hit.date, p2: hit.p }; drawChart(); }
+  else { pushDrawing({ type: "trend", d1: state.drawings.draft.d1, p1: state.drawings.draft.p1, d2: hit.date, p2: hit.p }); state.drawings.draft = null; }
+});
+chartEl?.addEventListener("pointermove", (e) => {
+  if (!state.drawings.tool || !state.drawings.draft) return;
+  const hit = chartHit(e); if (!hit) return;
+  state.drawings.draft.d2 = hit.date; state.drawings.draft.p2 = hit.p;
+  drawChart();
+});
 $("indicatorSelect").addEventListener("change", () => { syncIndicatorParams(true); drawChart(); }); $("maPeriods").addEventListener("input", drawChart); $("indicatorParams").addEventListener("input", drawChart); $("themeToggle").addEventListener("click", () => { document.body.classList.toggle("dark"); $("themeToggle").textContent = document.body.classList.contains("dark") ? "亮色" : "深色"; drawChart(); });
 [$("lotInput"), $("amountInput"), $("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("input", updateOrderEstimate));
 [$("orderByLots"), $("orderByAmount")].forEach((el) => el?.addEventListener("change", updateOrderEstimate));
+[$("priceClose"), $("priceOpen")].forEach((el) => el?.addEventListener("change", () => { if (state.active) { updateOrderEstimate(); renderAll(); } }));
 document.querySelectorAll(".lot-quick").forEach((b) => b.addEventListener("click", () => { $("lotInput").value = b.dataset.lots; updateOrderEstimate(); }));
 $("halfCash").addEventListener("click", () => { const r = rowAt(state.active); if (r) { $("lotInput").value = Math.max(1, Math.floor(fromCents(state.cashCents) * 0.5 / r.close / 100)); updateOrderEstimate(); } });
-$("chart").addEventListener("mousemove", (e) => { const rows = rowsOf(state.active).filter((r) => r.date <= state.dates[state.index]).slice(-120); if (!rows.length) return; const rect = e.currentTarget.getBoundingClientRect(), i = Math.max(0, Math.min(rows.length - 1, Math.floor((e.clientX - rect.left - 46) / ((rect.width - 69) / rows.length)))); const r = rows[i]; $("crosshairInfo").textContent = `${r.date} 开:${r.open.toFixed(2)} 高:${r.high.toFixed(2)} 低:${r.low.toFixed(2)} 收:${r.close.toFixed(2)} 量:${Math.round(r.volume).toLocaleString()} 涨跌幅:${pct(r.close / r.pre_close - 1)}`; });
+$("chart").addEventListener("mousemove", (e) => {
+  const rows = state.chartView?.view || chartRows(state.active).slice(-120);
+  if (!rows.length) return;
+  const rect = e.currentTarget.getBoundingClientRect(), i = Math.max(0, Math.min(rows.length - 1, Math.floor((e.clientX - rect.left - 46) / ((rect.width - 69) / rows.length))));
+  const r = rows[i];
+  $("crosshairInfo").textContent = `${PERIOD_LABEL[periodOf()] || "日线"} ${r.date} 开:${r.open.toFixed(2)} 高:${r.high.toFixed(2)} 低:${r.low.toFixed(2)} 收:${r.close.toFixed(2)} 量:${Math.round(r.volume).toLocaleString()} 涨跌幅:${pct(r.close / r.pre_close - 1)}`;
+});
 window.addEventListener("resize", () => state.active && drawChart());
 syncIndicatorParams(false);
 renderFilterBuilder(document.getElementById("setupFilterContainer"), "setup");
@@ -720,4 +1034,8 @@ try {
   boot();
 } catch (error) {
   showError(error);
+}
+
+if (typeof window !== "undefined") {
+  window.KLINE = { state, posShares, posCost, posSellable, posLocked, roundTripStats };
 }

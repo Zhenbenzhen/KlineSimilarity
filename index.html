@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>K线模拟</title>
+    <title>韭菜模拟器</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
       <header class="topbar">
         <div class="brand-block">
           <p class="eyebrow">KlineSimilarity</p>
-          <h1>K线模拟</h1>
+          <h1>韭菜模拟器</h1>
         </div>
         <div class="top-actions">
           <button id="themeToggle" class="ghost" type="button">深色</button>
@@ -87,11 +87,11 @@
 
         <section id="simulator" class="simulator hidden">
           <div class="status-bar panel">
-            <div><span>当前日期</span><strong id="currentDate">-</strong></div>
-            <div><span>总资产</span><strong id="totalAsset">-</strong></div>
-            <div><span>可用资金</span><strong id="cashAvailable">-</strong></div>
-            <div><span>冻结资金</span><strong id="frozenCash">-</strong></div>
-            <div><span>浮动盈亏</span><strong id="floatingPnl">-</strong></div>
+          <div><span>当前日期</span><strong id="currentDate">-</strong></div>
+          <div><span>总资产</span><strong id="totalAsset">-</strong></div>
+          <div><span>可用资金</span><strong id="cashAvailable">-</strong></div>
+          <div><span>持仓市值</span><strong id="positionValue">-</strong></div>
+          <div><span>浮动盈亏</span><strong id="floatingPnl">-</strong></div>
           </div>
 
           <div class="workspace">
@@ -108,6 +108,13 @@
                   <h2 id="activeTitle">-</h2>
                 </div>
                 <div class="chart-controls">
+                  <label>周期
+                    <select id="periodSelect" aria-label="选择K线周期">
+                      <option value="day">日线</option>
+                      <option value="week">周线</option>
+                      <option value="month">月线</option>
+                    </select>
+                  </label>
                   <label>均线周期<input id="maPeriods" type="text" value="5,10,20,60,120,250" /></label>
                   <label>指标参数<input id="indicatorParams" type="text" value="12,26,9" /></label>
                   <label>指标副图
@@ -124,6 +131,14 @@
                   </label>
                 </div>
               </div>
+              <div class="draw-tools">
+                <span class="draw-tools-label">画线</span>
+                <button class="ghost draw-tool" type="button" data-tool="trend">趋势线</button>
+                <button class="ghost draw-tool" type="button" data-tool="hline">水平线</button>
+                <button class="ghost draw-undo" type="button">撤销一笔</button>
+                <button class="ghost draw-clear" type="button">清除画线</button>
+                <span class="draw-tools-hint">在K线主图区域内点击取点，Esc 取消</span>
+              </div>
               <canvas id="chart" width="1200" height="720" aria-label="K线图"></canvas>
               <div id="crosshairInfo" class="crosshair-info">移动到图表查看 OHLC 与指标。</div>
               <div id="tabs" class="tabs"></div>
@@ -135,6 +150,10 @@
                 <div class="order-mode">
                   <label><input id="orderByLots" type="radio" name="orderMode" value="lots" checked /> 按手数</label>
                   <label><input id="orderByAmount" type="radio" name="orderMode" value="amount" /> 按金额</label>
+                </div>
+                <div class="order-mode">
+                  <label><input id="priceClose" type="radio" name="priceModeSel" value="close" checked /> 当日收盘价成交</label>
+                  <label><input id="priceOpen" type="radio" name="priceModeSel" value="open" /> 次日开盘价成交</label>
                 </div>
                 <label>手数<input id="lotInput" type="number" min="1" step="1" value="1" /></label>
                 <label>买入金额<input id="amountInput" type="number" min="0" step="1000" value="10000" /></label>
@@ -149,7 +168,29 @@
                   <button id="buyBtn" type="button">买入</button>
                   <button id="sellBtn" class="sell" type="button">卖出</button>
                 </div>
-                <button id="cancelOrders" class="ghost full" type="button">清空提示</button>
+              </section>
+
+              <section>
+                <h3>当日委托</h3>
+                <p class="filter-hint">每笔下单可单独选择成交价；选次日开盘价后，委托会挂到下一交易日开盘成交，可随时撤销。</p>
+                <div id="pendingOrders" class="positions empty">暂无挂单</div>
+                <button id="cancelOrders" class="ghost full" type="button">撤销全部委托</button>
+              </section>
+
+              <section>
+                <h3>止盈止损</h3>
+                <p class="filter-hint">对当前标的设置条件单，触发后按当日收盘价自动卖出，仅对当日开盘前已持有的可卖持仓生效。</p>
+                <div class="sl-grid">
+                  <label>止损价<input id="slStop" type="number" min="0" step="0.01" placeholder="跌破价" /></label>
+                  <label>止盈价<input id="slTake" type="number" min="0" step="0.01" placeholder="涨破价" /></label>
+                  <label>手数(空=全部)<input id="slLots" type="number" min="0" step="1" /></label>
+                </div>
+                <div class="trade-actions">
+                  <button id="slSet" type="button">设置条件单</button>
+                  <button id="slCancel" class="ghost" type="button">取消当前标的</button>
+                </div>
+                <div id="slList" class="positions">暂无条件单</div>
+              </section>
                 <button id="nextDay" class="full" type="button">下一交易日</button>
                 <button id="finishSim" class="ghost full" type="button">终止并查看报告</button>
               </section>
