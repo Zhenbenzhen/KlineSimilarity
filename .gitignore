@@ -1,3 +1,7 @@
 DataAccess.ipynb
 *.ipynb_checkpoints/
 .omo/
+
+# 不对外分发：外部数据接口取数脚本（仅保留本地使用）
+scripts/fetch_eastmoney_sample.js
+scripts/fetch_rqdatac_daily.py
